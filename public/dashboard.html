@@ -1,0 +1,549 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SEO Intelligence Dashboard</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        
+        header {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            margin-bottom: 30px;
+            box-shadow: 0 5px 20px rgba(0,0,0,0.1);
+        }
+        
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+        }
+        
+        .status {
+            display: inline-block;
+            padding: 8px 15px;
+            border-radius: 20px;
+            font-size: 14px;
+            font-weight: 500;
+            background: #4CAF50;
+            color: white;
+        }
+        
+        .status.error {
+            background: #f44336;
+        }
+        
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        
+        .stat-card {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 5px 20px rgba(0,0,0,0.1);
+            border-left: 5px solid #667eea;
+        }
+        
+        .stat-label {
+            font-size: 12px;
+            color: #999;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 10px;
+        }
+        
+        .stat-value {
+            font-size: 32px;
+            font-weight: bold;
+            color: #333;
+            margin-bottom: 5px;
+        }
+        
+        .stat-unit {
+            font-size: 14px;
+            color: #666;
+        }
+        
+        .section {
+            background: white;
+            padding: 25px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            box-shadow: 0 5px 20px rgba(0,0,0,0.1);
+        }
+        
+        .section h2 {
+            color: #333;
+            margin-bottom: 20px;
+            font-size: 20px;
+            border-bottom: 2px solid #667eea;
+            padding-bottom: 10px;
+        }
+        
+        .section h3 {
+            color: #666;
+            margin-top: 20px;
+            margin-bottom: 10px;
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 20px;
+        }
+        
+        th {
+            background: #f5f5f5;
+            padding: 12px;
+            text-align: left;
+            font-weight: 600;
+            color: #333;
+            border-bottom: 2px solid #ddd;
+        }
+        
+        td {
+            padding: 12px;
+            border-bottom: 1px solid #eee;
+            color: #666;
+        }
+        
+        tr:hover {
+            background: #f9f9f9;
+        }
+        
+        .tag {
+            display: inline-block;
+            padding: 4px 10px;
+            background: #667eea;
+            color: white;
+            border-radius: 15px;
+            font-size: 12px;
+            margin-right: 5px;
+            margin-bottom: 5px;
+        }
+        
+        .tag.high {
+            background: #f44336;
+        }
+        
+        .tag.medium {
+            background: #ff9800;
+        }
+        
+        .tag.low {
+            background: #4CAF50;
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #999;
+        }
+        
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .empty-state {
+            text-align: center;
+            padding: 40px;
+            color: #999;
+        }
+        
+        .empty-state p {
+            margin-bottom: 15px;
+        }
+        
+        .buttons {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        
+        button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 5px;
+            background: #667eea;
+            color: white;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: background 0.3s;
+        }
+        
+        button:hover {
+            background: #764ba2;
+        }
+        
+        button.secondary {
+            background: #ddd;
+            color: #333;
+        }
+        
+        button.secondary:hover {
+            background: #bbb;
+        }
+        
+        input {
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 14px;
+            flex: 1;
+            max-width: 400px;
+        }
+        
+        .quality-bar {
+            width: 100%;
+            height: 6px;
+            background: #eee;
+            border-radius: 3px;
+            overflow: hidden;
+        }
+        
+        .quality-bar-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #f44336, #ff9800, #4CAF50);
+            border-radius: 3px;
+        }
+        
+        .recommendation {
+            padding: 12px;
+            border-left: 4px solid #ff9800;
+            background: #fff9e6;
+            margin-bottom: 10px;
+            border-radius: 4px;
+        }
+        
+        .recommendation.critical {
+            border-left-color: #f44336;
+            background: #ffebee;
+        }
+        
+        .recommendation.success {
+            border-left-color: #4CAF50;
+            background: #e8f5e9;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🔍 SEO Intelligence Dashboard</h1>
+            <div id="status" class="status">Loading...</div>
+        </header>
+        
+        <div class="buttons">
+            <input type="url" id="urlInput" placeholder="https://example.com" />
+            <button onclick="runAnalysis()">Run Analysis</button>
+            <button class="secondary" onclick="loadDashboard()">Load Dashboard</button>
+            <button class="secondary" onclick="exportData()">Export Data</button>
+        </div>
+        
+        <div id="content">
+            <div class="loading">
+                <div class="spinner"></div>
+                <p>Loading dashboard data...</p>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        const API_BASE = 'http://localhost:3000';
+        
+        async function loadDashboard() {
+            try {
+                const response = await fetch(`${API_BASE}/dashboard`);
+                const result = await response.json();
+                
+                if (result.success && result.data.recentAnalyses.length > 0) {
+                    renderDashboard(result.data);
+                } else {
+                    renderEmpty();
+                }
+            } catch (err) {
+                renderError(err.message);
+            }
+        }
+        
+        async function runAnalysis() {
+            const url = document.getElementById('urlInput').value;
+            if (!url) {
+                alert('Please enter a URL');
+                return;
+            }
+            
+            const content = document.getElementById('content');
+            content.innerHTML = '<div class="loading"><div class="spinner"></div><p>Running analysis...</p></div>';
+            
+            try {
+                const response = await fetch(`${API_BASE}/analyze`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url, keywords: ['seo', 'backlinks'], depth: 2, concurrency: 5 })
+                });
+                
+                const result = await response.json();
+                if (result.success) {
+                    renderAnalysis(result.data);
+                } else {
+                    renderError(result.error);
+                }
+            } catch (err) {
+                renderError(err.message);
+            }
+        }
+        
+        function renderDashboard(data) {
+            let html = '<div class="stats-grid">';
+            
+            if (data.recentAnalyses && data.recentAnalyses.length > 0) {
+                const latest = data.recentAnalyses[0];
+                html += `
+                    <div class="stat-card">
+                        <div class="stat-label">Recent Analysis</div>
+                        <div style="font-size: 14px; color: #666; word-break: break-all;">${latest.url}</div>
+                        <div class="stat-unit">${new Date(latest.analysisDate).toLocaleString()}</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Internal Pages</div>
+                        <div class="stat-value">${latest.internalLinks?.totalPages || 0}</div>
+                        <div class="stat-unit">with ${latest.internalLinks?.orphanPages || 0} orphan pages</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Backlinks</div>
+                        <div class="stat-value">${latest.backlinks?.totalBacklinks || 0}</div>
+                        <div class="stat-unit">from ${latest.backlinks?.referringDomains || 0} domains</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Competitors</div>
+                        <div class="stat-value">${latest.competitors?.competitors || 0}</div>
+                        <div class="stat-unit">${latest.competitors?.contentGaps || 0} content gaps</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Content Quality</div>
+                        <div class="stat-value">${latest.content?.contentQualityScore || '0%'}</div>
+                        <div class="stat-unit">${latest.content?.wordCount || 0} words</div>
+                    </div>
+                `;
+            }
+            
+            html += '</div>';
+            html += '<div class="section"><h2>Recent Analyses</h2>';
+            html += '<table><thead><tr><th>URL</th><th>Date</th><th>Status</th><th>Action</th></tr></thead><tbody>';
+            
+            if (data.recentAnalyses) {
+                data.recentAnalyses.forEach(analysis => {
+                    html += `
+                        <tr>
+                            <td style="max-width: 300px; word-break: break-all;">${analysis.url}</td>
+                            <td>${new Date(analysis.analysisDate).toLocaleString()}</td>
+                            <td><span class="status">Completed</span></td>
+                            <td><button onclick="loadResult('${analysis.url}')" class="secondary" style="padding: 5px 10px;">View</button></td>
+                        </tr>
+                    `;
+                });
+            }
+            
+            html += '</tbody></table></div>';
+            document.getElementById('content').innerHTML = html;
+            document.getElementById('status').textContent = `Total Analyses: ${data.totalAnalyses}`;
+        }
+        
+        function renderAnalysis(analysis) {
+            if (!analysis) {
+                renderEmpty();
+                return;
+            }
+            
+            let html = '<div class="stats-grid">';
+            
+            // Internal Links Stats
+            if (analysis.internalLinks) {
+                html += `
+                    <div class="stat-card">
+                        <div class="stat-label">Total Pages</div>
+                        <div class="stat-value">${analysis.internalLinks.summary.totalPages || 0}</div>
+                        <div class="stat-unit">crawled successfully</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Orphan Pages</div>
+                        <div class="stat-value">${analysis.internalLinks.summary.orphanPages || 0}</div>
+                        <div class="stat-unit">need internal links</div>
+                    </div>
+                `;
+            }
+            
+            // Backlinks Stats
+            if (analysis.backlinks) {
+                html += `
+                    <div class="stat-card">
+                        <div class="stat-label">Backlinks</div>
+                        <div class="stat-value">${analysis.backlinks.summary.totalBacklinks || 0}</div>
+                        <div class="stat-unit">from ${analysis.backlinks.summary.referringDomains || 0} domains</div>
+                    </div>
+                `;
+            }
+            
+            // Content Stats
+            if (analysis.content) {
+                html += `
+                    <div class="stat-card">
+                        <div class="stat-label">Content Quality</div>
+                        <div class="stat-value">${analysis.content.summary.contentQualityScore || '0%'}</div>
+                        <div class="quality-bar"><div class="quality-bar-fill" style="width: ${analysis.content.summary.contentQualityScore || 0};"></div></div>
+                    </div>
+                `;
+            }
+            
+            html += '</div>';
+            
+            // Internal Links Section
+            if (analysis.internalLinks) {
+                html += `<div class="section">
+                    <h2>📊 Internal Links Analysis</h2>
+                    <h3>Orphan Pages</h3>
+                    ${analysis.internalLinks.orphanPages && analysis.internalLinks.orphanPages.length > 0 
+                        ? '<table><tbody>' + analysis.internalLinks.orphanPages.slice(0, 5).map(p => `<tr><td><a href="${p}" target="_blank">${p}</a></td></tr>`).join('') + '</tbody></table>'
+                        : '<p>✅ No orphan pages found</p>'
+                    }
+                    <h3>Suggestions</h3>
+                    ${analysis.internalLinks.suggestions && analysis.internalLinks.suggestions.length > 0
+                        ? analysis.internalLinks.suggestions.slice(0, 3).map(s => `<div class="recommendation">${s.suggestion}</div>`).join('')
+                        : '<p>No suggestions</p>'
+                    }
+                </div>`;
+            }
+            
+            // Backlinks Section
+            if (analysis.backlinks) {
+                html += `<div class="section">
+                    <h2>🔗 Backlinks Analysis</h2>
+                    <h3>Top Referring Domains</h3>
+                    ${analysis.backlinks.referringDomains && analysis.backlinks.referringDomains.length > 0
+                        ? '<table><tbody>' + analysis.backlinks.referringDomains.slice(0, 10).map(d => `<tr><td>${d}</td></tr>`).join('') + '</tbody></table>'
+                        : '<p>No referrers found</p>'
+                    }
+                    <h3>Link Acquisition Opportunities</h3>
+                    ${analysis.backlinks.suggestions && analysis.backlinks.suggestions.length > 0
+                        ? analysis.backlinks.suggestions.slice(0, 3).map(s => `<div class="recommendation">${s.suggestion}</div>`).join('')
+                        : '<p>No suggestions</p>'
+                    }
+                </div>`;
+            }
+            
+            // Competitors Section
+            if (analysis.competitors) {
+                html += `<div class="section">
+                    <h2>🎯 Competitors Analysis</h2>
+                    <h3>Detected Competitors</h3>
+                    ${analysis.competitors.competitors && analysis.competitors.competitors.length > 0
+                        ? '<div>' + analysis.competitors.competitors.map(c => `<span class="tag">${c}</span>`).join('') + '</div>'
+                        : '<p>No competitors detected</p>'
+                    }
+                    <h3>Content Gaps</h3>
+                    ${analysis.competitors.contentGaps && analysis.competitors.contentGaps.length > 0
+                        ? '<div>' + analysis.competitors.contentGaps.slice(0, 5).map(g => `<div class="recommendation">${g}</div>`).join('') + '</div>'
+                        : '<p>No content gaps found</p>'
+                    }
+                </div>`;
+            }
+            
+            // Content Section
+            if (analysis.content) {
+                html += `<div class="section">
+                    <h2>📝 Content Analysis</h2>
+                    <table>
+                        <tr><th>Metric</th><th>Value</th></tr>
+                        <tr><td>Word Count</td><td>${analysis.content.wordCount || 0}</td></tr>
+                        <tr><td>Headings Found</td><td>H1: ${(analysis.content.headings?.h1 || []).length}, H2: ${(analysis.content.headings?.h2 || []).length}, H3: ${(analysis.content.headings?.h3 || []).length}</td></tr>
+                        <tr><td>Keywords Extracted</td><td>${(analysis.content.keywords || []).length}</td></tr>
+                        <tr><td>Schema Markup</td><td>${(analysis.content.schema || []).length}</td></tr>
+                    </table>
+                    <h3>Top Keywords</h3>
+                    ${analysis.content.keywords && analysis.content.keywords.length > 0
+                        ? '<div>' + analysis.content.keywords.slice(0, 10).map(k => `<span class="tag">${k.word} (${k.frequency})</span>`).join('') + '</div>'
+                        : '<p>No keywords extracted</p>'
+                    }
+                    <h3>Recommendations</h3>
+                    ${analysis.content.aiRecommendations && analysis.content.aiRecommendations.length > 0
+                        ? analysis.content.aiRecommendations.map(r => `<div class="recommendation ${r.priority === 'high' ? 'critical' : ''}">[${r.priority.toUpperCase()}] ${r.suggestion}</div>`).join('')
+                        : '<p>No recommendations</p>'
+                    }
+                </div>`;
+            }
+            
+            document.getElementById('content').innerHTML = html;
+            document.getElementById('status').textContent = `Analysis Complete • ${analysis.url}`;
+        }
+        
+        function renderEmpty() {
+            document.getElementById('content').innerHTML = `
+                <div class="empty-state">
+                    <p>📊 No analysis data available</p>
+                    <p>Enter a URL above and click "Run Analysis" to get started</p>
+                </div>
+            `;
+        }
+        
+        function renderError(message) {
+            document.getElementById('content').innerHTML = `
+                <div class="section" style="background: #ffebee;">
+                    <h2 style="color: #f44336;">⚠️ Error</h2>
+                    <p style="color: #d32f2f;">${message}</p>
+                </div>
+            `;
+            document.getElementById('status').className = 'status error';
+            document.getElementById('status').textContent = 'Error: ' + message;
+        }
+        
+        function exportData() {
+            alert('Export feature coming soon!');
+        }
+        
+        async function loadResult(url) {
+            document.getElementById('urlInput').value = url;
+            runAnalysis();
+        }
+        
+        // Load dashboard on page load
+        window.onload = loadDashboard;
+    </script>
+</body>
+</html>

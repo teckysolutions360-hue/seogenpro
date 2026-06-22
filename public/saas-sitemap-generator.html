@@ -1,0 +1,648 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SaaS Sitemap Generator</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            max-width: 600px;
+            width: 100%;
+            padding: 40px;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        .header h1 {
+            font-size: 28px;
+            color: #333;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            color: #666;
+            font-size: 14px;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        label {
+            display: block;
+            font-size: 14px;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 8px;
+        }
+
+        input[type="text"],
+        input[type="number"],
+        select {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+        }
+
+        input[type="text"]:focus,
+        input[type="number"]:focus,
+        select:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        .form-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+        }
+
+        .form-row-3 {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 15px;
+        }
+
+        .help-text {
+            font-size: 12px;
+            color: #999;
+            margin-top: 5px;
+        }
+
+        .submit-btn {
+            width: 100%;
+            padding: 14px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 5px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .submit-btn:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3);
+        }
+
+        .submit-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .status-section {
+            display: none;
+            margin-top: 30px;
+            padding-top: 30px;
+            border-top: 1px solid #eee;
+        }
+
+        .status-section.active {
+            display: block;
+        }
+
+        .status-header {
+            font-size: 16px;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 15px;
+        }
+
+        .job-id {
+            font-size: 12px;
+            color: #999;
+            word-break: break-all;
+            margin-bottom: 10px;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 8px;
+            background: #eee;
+            border-radius: 4px;
+            overflow: hidden;
+            margin-bottom: 10px;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            width: 0%;
+            transition: width 0.3s;
+        }
+
+        .progress-text {
+            font-size: 14px;
+            color: #666;
+            margin-bottom: 15px;
+        }
+
+        .status-badge {
+            display: inline-block;
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            margin-bottom: 15px;
+        }
+
+        .status-badge.queued {
+            background: #ffeaa7;
+            color: #d63031;
+        }
+
+        .status-badge.active {
+            background: #74b9ff;
+            color: #0984e3;
+        }
+
+        .status-badge.completed {
+            background: #55efc4;
+            color: #00b894;
+        }
+
+        .status-badge.failed {
+            background: #fab1a0;
+            color: #e17055;
+        }
+
+        .action-buttons {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-top: 15px;
+        }
+
+        .btn {
+            padding: 12px;
+            border: none;
+            border-radius: 5px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.3);
+        }
+
+        .btn-primary:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .btn-secondary {
+            background: #f0f0f0;
+            color: #333;
+        }
+
+        .btn-secondary:hover {
+            background: #e0e0e0;
+        }
+
+        .stats {
+            background: #f9f9f9;
+            padding: 15px;
+            border-radius: 5px;
+            margin-top: 15px;
+            display: none;
+        }
+
+        .stats.active {
+            display: block;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+
+        .stat-item {
+            font-size: 13px;
+        }
+
+        .stat-label {
+            color: #999;
+            margin-bottom: 3px;
+        }
+
+        .stat-value {
+            font-size: 18px;
+            font-weight: 600;
+            color: #333;
+        }
+
+        .error-message {
+            background: #fab1a0;
+            color: #e17055;
+            padding: 12px;
+            border-radius: 5px;
+            margin-bottom: 15px;
+            display: none;
+        }
+
+        .error-message.active {
+            display: block;
+        }
+
+        .spinner {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        @media (max-width: 600px) {
+            .container {
+                padding: 20px;
+            }
+
+            .header h1 {
+                font-size: 24px;
+            }
+
+            .form-row,
+            .form-row-3 {
+                grid-template-columns: 1fr;
+            }
+
+            .action-buttons {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🌐 Sitemap Generator</h1>
+            <p>Generate dynamic sitemaps for any website</p>
+        </div>
+
+        <form id="crawlForm">
+            <div class="error-message" id="errorMessage"></div>
+
+            <div class="form-group">
+                <label for="url">Website URL *</label>
+                <input
+                    type="text"
+                    id="url"
+                    name="url"
+                    placeholder="https://example.com"
+                    required
+                >
+                <div class="help-text">Enter the URL of the website to crawl (must start with http:// or https://)</div>
+            </div>
+
+            <div class="form-row-3">
+                <div class="form-group">
+                    <label for="maxDepth">Max Depth</label>
+                    <input
+                        type="number"
+                        id="maxDepth"
+                        name="maxDepth"
+                        placeholder="(leave blank for unlimited)"
+                        min="0"
+                        max="1000"
+                    >
+                    <div class="help-text">0 = homepage only, blank or large = no limit (recommend 10–20 for huge sites)</div>
+                </div>
+
+                <div class="form-group">
+                    <label for="maxUrls">Max URLs</label>
+                    <input
+                        type="number"
+                        id="maxUrls"
+                        name="maxUrls"
+                        value="50000"
+                        min="100"
+                        max="500000"
+                    >
+                    <div class="help-text">100-500,000</div>
+                </div>
+
+                <div class="form-group">
+                    <label for="concurrency">Concurrency</label>
+                    <input
+                        type="number"
+                        id="concurrency"
+                        name="concurrency"
+                        value="10"
+                        min="1"
+                        max="50"
+                    >
+                    <div class="help-text">Parallel requests (higher = faster)</div>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="sitemapType">Sitemap Type</label>
+                <select id="sitemapType" name="sitemapType">
+                    <option value="standard">Standard</option>
+                    <option value="news">News</option>
+                    <option value="image">Image</option>
+                    <option value="video">Video</option>
+                </select>
+                <div class="help-text">Choose the type of sitemap to generate</div>
+            </div>
+
+            <div class="form-group options">
+                <div class="form-check">
+                    <input type="checkbox" class="form-check-input" id="includePagination" />
+                    <label class="form-check-label" for="includePagination">Include pagination/search URLs</label>
+                </div>
+                <div class="form-check">
+                    <input type="checkbox" class="form-check-input" id="collectImages" />
+                    <label class="form-check-label" for="collectImages">Collect images</label>
+                </div>
+                <div class="form-check">
+                    <input type="checkbox" class="form-check-input" id="collectVideos" />
+                    <label class="form-check-label" for="collectVideos">Collect videos</label>
+                </div>
+            </div>
+
+            <button type="submit" class="submit-btn" id="submitBtn">Generate Sitemap</button>
+        </form>
+
+        <!-- Status Section -->
+        <div class="status-section" id="statusSection">
+            <div class="status-header">
+                <span class="spinner"></span> Processing...
+            </div>
+
+            <div class="job-id">
+                Job ID: <code id="jobId"></code>
+            </div>
+
+            <div class="status-badge" id="statusBadge"></div>
+
+            <div class="progress-bar">
+                <div class="progress-fill" id="progressFill"></div>
+            </div>
+
+            <div class="progress-text">
+                <span id="progressText">0%</span>
+                <span id="estimatedTime"></span>
+            </div>
+
+            <div class="stats" id="stats">
+                <div class="stats-grid">
+                    <div class="stat-item">
+                        <div class="stat-label">Total URLs</div>
+                        <div class="stat-value" id="statUrls">-</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">File Size</div>
+                        <div class="stat-value" id="statSize">-</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">Images</div>
+                        <div class="stat-value" id="statImages">-</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">Videos</div>
+                        <div class="stat-value" id="statVideos">-</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="action-buttons">
+                <button type="button" class="btn btn-primary" id="previewBtn" style="display:none;">Preview</button>
+                <button type="button" class="btn btn-primary" id="inlineViewBtn" style="display:none;">View XML</button>
+                <button type="button" class="btn btn-primary" id="downloadBtn" style="display:none;">Download XML</button>
+                <button type="button" class="btn btn-secondary" id="newCrawlBtn" style="display:none;">New Crawl</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const form = document.getElementById('crawlForm');
+        const statusSection = document.getElementById('statusSection');
+        const submitBtn = document.getElementById('submitBtn');
+        const errorMessage = document.getElementById('errorMessage');
+
+        let currentJobId = null;
+        let pollInterval = null;
+
+        // Form submission
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            errorMessage.classList.remove('active');
+
+            const url = document.getElementById('url').value.trim();
+            const depthInput = document.getElementById('maxDepth').value.trim();
+            let maxDepth;
+            if (depthInput === '') {
+                maxDepth = undefined; // undefined triggers unlimited on server
+            } else {
+                maxDepth = parseInt(depthInput, 10);
+                if (isNaN(maxDepth) || maxDepth < 0) maxDepth = undefined;
+            }
+            const maxUrls = parseInt(document.getElementById('maxUrls').value) || 50000;
+            const concurrency = parseInt(document.getElementById('concurrency').value) || 10;
+            const sitemapType = document.getElementById('sitemapType').value;
+            const includePagination = document.getElementById('includePagination').checked;
+            const collectImages = document.getElementById('collectImages').checked;
+            const collectVideos = document.getElementById('collectVideos').checked;
+
+            // Validate URL
+            if (!url.startsWith('http://') && !url.startsWith('https://')) {
+                showError('URL must start with http:// or https://');
+                return;
+            }
+
+            submitBtn.disabled = true;
+            submitBtn.textContent = 'Submitting...';
+
+            try {
+                // build payload object, omit maxDepth when it's undefined so server treats it as unlimited
+                const payload = {
+                    url,
+                    maxUrls,
+                    concurrency,
+                    sitemapType,
+                    filterOptions: { includePagination, includeSearch: includePagination },
+                    collectImages,
+                    collectVideos
+                };
+                if (typeof maxDepth !== 'undefined') {
+                    payload.maxDepth = maxDepth;
+                }
+
+                const response = await fetch('/api/saas/sitemap/generate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                const data = await response.json();
+
+                if (!data.success) {
+                    showError(data.error || 'Failed to submit crawl job');
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = 'Generate Sitemap';
+                    return;
+                }
+
+                currentJobId = data.jobId;
+                document.getElementById('jobId').textContent = data.jobId;
+
+                // Show status section and start polling
+                form.style.display = 'none';
+                statusSection.classList.add('active');
+                startPolling();
+
+            } catch (error) {
+                showError('Error: ' + error.message);
+                submitBtn.disabled = false;
+                submitBtn.textContent = 'Generate Sitemap';
+            }
+        });
+
+        // Poll for status
+        function startPolling() {
+            pollInterval = setInterval(async () => {
+                try {
+                    const response = await fetch(`/api/saas/sitemap/status/${currentJobId}`);
+                    const data = await response.json();
+
+                    if (!data.success) {
+                        showError('Failed to fetch status');
+                        return;
+                    }
+
+                    // Update status badge
+                    const badge = document.getElementById('statusBadge');
+                    badge.className = `status-badge ${data.status}`;
+                    badge.textContent = data.status.charAt(0).toUpperCase() + data.status.slice(1);
+
+                    // Update progress
+                    document.getElementById('progressFill').style.width = data.progress + '%';
+                    document.getElementById('progressText').textContent = data.progress + '%';
+
+                    if (data.estimatedTimeRemaining) {
+                        document.getElementById('estimatedTime').textContent = `(${data.estimatedTimeRemaining})`;
+                    }
+
+                    // Fetch stats if completed
+                    if (data.status === 'completed') {
+                        clearInterval(pollInterval);
+                        fetchStats();
+                        updateCompletedUI();
+                    } else if (data.status === 'failed') {
+                        clearInterval(pollInterval);
+                        showError(data.failureReason || 'Job failed');
+                    }
+
+                } catch (error) {
+                    console.error('Polling error:', error);
+                }
+            }, 2000);
+        }
+
+        // Fetch statistics
+        async function fetchStats() {
+            try {
+                const response = await fetch(`/api/saas/sitemap/stats/${currentJobId}`);
+                const data = await response.json();
+
+                if (data.success && data.stats) {
+                    document.getElementById('statUrls').textContent = data.stats.total || '-';
+                    document.getElementById('statSize').textContent = data.stats.xmlSizeMB + ' MB' || '-';
+                    document.getElementById('stats').classList.add('active');
+                }
+            } catch (error) {
+                console.error('Stats error:', error);
+            }
+        }
+
+        // Update UI when completed
+        function updateCompletedUI() {
+            document.getElementById('previewBtn').style.display = 'inline-block';
+            document.getElementById('downloadBtn').style.display = 'inline-block';
+            document.getElementById('inlineViewBtn').style.display = 'inline-block';
+            document.getElementById('newCrawlBtn').style.display = 'inline-block';
+
+            document.getElementById('previewBtn').addEventListener('click', () => {
+                window.open(`/api/saas/sitemap/preview/${currentJobId}`, '_blank');
+            });
+
+            document.getElementById('downloadBtn').addEventListener('click', () => {
+                window.location.href = `/api/saas/sitemap/download/${currentJobId}`;
+            });
+
+            // Fetch XML and open in new tab without triggering download
+            document.getElementById('inlineViewBtn').addEventListener('click', async () => {
+                try {
+                    const resp = await fetch(`/api/saas/sitemap/download/${currentJobId}?inline=true`);
+                    const text = await resp.text();
+                    const blob = new Blob([text], { type: 'application/xml' });
+                    const url = URL.createObjectURL(blob);
+                    window.open(url, '_blank');
+                } catch (err) {
+                    console.error('Inline view failed', err);
+                    showError('Unable to fetch sitemap');
+                }
+            });
+
+            document.getElementById('newCrawlBtn').addEventListener('click', () => {
+                form.style.display = 'block';
+                statusSection.classList.remove('active');
+                form.reset();
+                submitBtn.disabled = false;
+                submitBtn.textContent = 'Generate Sitemap';
+            });
+        }
+
+        // Show error
+        function showError(msg) {
+            errorMessage.textContent = msg;
+            errorMessage.classList.add('active');
+        }
+    </script>
+</body>
+</html>
