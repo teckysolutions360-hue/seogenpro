@@ -5,8 +5,8 @@
 const Crawler = require('../services/saas-sitemap/crawler');
 const sitemapGenerator = require('../services/saas-sitemap/sitemapGenerator');
 const { validateUrl } = require('../utils/validators');
-const { v4: uuidv4 } = require('uuid');
-const DEBUG_SITEMAP = process.env.DEBUG_SITEMAP === 'true';
+const crypto = require('crypto');
+ const DEBUG_SITEMAP = process.env.DEBUG_SITEMAP === 'true';
 
 // In-memory store for job status (this mirrors the saas queue behaviour but is
 // purely in-memory for backward compatibility with the original API).
@@ -30,7 +30,7 @@ exports.generateSitemap = async (req, res) => {
       return res.status(400).json({ error: 'Valid URL is required' });
     }
 
-    const jobId = uuidv4();
+    const jobId = crypto.randomUUID();
     jobStore.set(jobId, {
       status: 'pending',
       progress: 0,
