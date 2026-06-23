@@ -1,8 +1,7 @@
 /**
  * Dynamic Sitemap Generator
  *
- * - Tries to load pages from `server/db.js` if available (recommended).
- * - Falls back to reading existing sitemap or HTTP fetch to build lastmod values.
+ * - Loads pages from existing sitemap or HTTP fetch to build lastmod values.
  * - Classifies page types and assigns dynamic priority and changefreq.
  * - Produces valid sitemap XML without unused namespaces.
  * - Exposes `generateSitemap()` and `expressMiddleware()` for serving `/sitemap.xml`.
@@ -14,14 +13,6 @@ const axios = require('axios');
 const { Builder, parseStringPromise } = require('xml2js');
 
 const DEFAULT_SITEMAP_PATH = path.join(__dirname, '..', '..', 'sitemap.xml');
-
-let db = null;
-try {
-  db = require('../../db');
-  console.log('dynamicSitemapGenerator: DB module found — will query pages from DB when available.');
-} catch (e) {
-  db = null;
-}
 
 function isoSafe(v) {
   if (!v) return null;
@@ -101,26 +92,6 @@ async function fetchLastModifiedHttp(url) {
   }
 }
 
-async function loadPagesFromDb() {
-  // Expect DB helper to expose `getAllPages()` or `query()` — adapt as needed for your app
-  if (!db) return null;
-  try {
-    if (typeof db.getAllPages === 'function') {
-      // should return array of { url, last_updated, type? }
-      const rows = await db.getAllPages();
-      return rows.map(r => ({ loc: r.url || r.loc, lastmod: r.updated_at || r.lastmod || r.updatedAt || r.updated_at }));
-    }
-    if (typeof db.query === 'function') {
-      // Try common schema `pages` table
-      const rows = await db.query('SELECT url, updated_at FROM pages WHERE published = 1');
-      if (rows && rows.length) return rows.map(r => ({ loc: r.url, lastmod: r.updated_at }));
-    }
-  } catch (e) {
-    console.warn('dynamicSitemapGenerator: DB lookup failed —', e.message);
-  }
-  return null;
-}
-
 async function loadUrlsFromExistingSitemap(filePath) {
   try {
     if (!fs.existsSync(filePath)) return [];
@@ -143,13 +114,7 @@ async function generateSitemap(options = {}) {
     recencyDaysForRecent = 30
   } = options;
 
-  // 1) Load pages from DB if possible
-  let pages = await loadPagesFromDb();
-
-  // 2) If DB not available, load from existing sitemap
-  if (!pages || pages.length === 0) {
-    pages = await loadUrlsFromExistingSitemap(sourceSitemap);
-  }
+  const pages = await loadUrlsFromExistingSitemap(sourceSitemap);
 
   // 3) Normalize and enrich
   const enriched = [];

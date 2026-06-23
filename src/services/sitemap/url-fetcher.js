@@ -1,18 +1,10 @@
 /**
  * url-fetcher.js
- * Fetches all URLs from database, CMS, or fallback sources
+ * Fetches sitemap URLs from fallback sources.
  * Handles: pages, blogs, products, services, jobs, categories, legal pages
  */
 
 const config = require('./sitemap-config');
-
-let db = null;
-try {
-  db = require('../../db');
-  console.log('[sitemap] Database connection available for URL fetching');
-} catch (e) {
-  console.warn('[sitemap] Database not available, will use fallback');
-}
 
 class UrlFetcher {
   constructor() {
@@ -30,76 +22,16 @@ class UrlFetcher {
   }
 
   /**
-   * Main fetch: tries DB first, then fallback
+   * Main fetch: returns sitemap fallback URLs
    */
   async fetchAll() {
     this.logger.log('Starting URL fetch...');
-
-    // Try DB
-    if (db) {
-      try {
-        const urls = await this._fetchFromDb();
-        if (urls && urls.length > 0) {
-          this.logger.log(`Fetched ${urls.length} URLs from database`);
-          return urls;
-        }
-      } catch (e) {
-        this.logger.error('DB fetch failed:', e.message);
-      }
-    }
-
-    // Fallback: mock data for demo
-    if (config.database.enableMocking || !db) {
-      this.logger.log('Using mock/fallback data');
-      return this._getMockUrls();
-    }
-
-    return [];
+    this.logger.log('Using mock/fallback data');
+    return this._getMockUrls();
   }
 
   /**
-   * Fetch from database using available methods
-   */
-  async _fetchFromDb() {
-    if (!db) return null;
-
-    // Try method 1: getAllPages() function
-    if (typeof db.getAllPages === 'function') {
-      this.logger.debug('Using db.getAllPages()');
-      const rows = await db.getAllPages();
-      return this._normalizeRows(rows);
-    }
-
-    // Try method 2: query() function
-    if (typeof db.query === 'function') {
-      this.logger.debug('Using db.query()');
-      // Standard query - adapt column names to your schema
-      const query = `
-        SELECT 
-          url, 
-          COALESCE(updated_at, created_at, NOW()) as lastmod,
-          type,
-          status
-        FROM pages 
-        WHERE status = 'published' OR status = 1
-        ORDER BY updated_at DESC
-      `;
-      const rows = await db.query(query);
-      return this._normalizeRows(rows);
-    }
-
-    // Try method 3: Direct collection access (Mongoose, etc)
-    if (db.models && db.models.Page) {
-      this.logger.debug('Using Mongoose Page model');
-      const rows = await db.models.Page.find({ published: true }).lean();
-      return this._normalizeRows(rows);
-    }
-
-    return null;
-  }
-
-  /**
-   * Normalize database rows to URL objects
+   * Normalize rows to URL objects
    */
   _normalizeRows(rows) {
     if (!Array.isArray(rows)) return [];
@@ -131,7 +63,7 @@ class UrlFetcher {
   }
 
   /**
-   * Mock data for testing without database
+   * Mock data for testing fallback URL generation
    */
   _getMockUrls() {
     const now = new Date().toISOString();

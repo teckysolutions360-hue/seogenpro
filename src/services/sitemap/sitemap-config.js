@@ -30,7 +30,7 @@ module.exports = {
     other: { priority: 0.5, changefreq: 'monthly', recentDays: 0, recentBoost: 0 }
   },
 
-  // URL patterns for type detection (fallback if DB doesn't provide type)
+  // URL patterns for type detection (fallback if type isn't provided)
   typePatterns: {
     homepage: /^\/$/,
     landing: /\/(services|contact|inquiry|lead|about|company)\b/i,
@@ -55,13 +55,7 @@ module.exports = {
     batchSize: 1000, // Process URLs in batches
     concurrency: 5, // Parallel HTTP requests for lastmod fetching
     httpTimeout: 6000, // 6 seconds for HTTP requests
-    skipHttpFetch: process.env.SITEMAP_SKIP_HTTP !== 'false' // skip HTTP if DB has data
-  },
-
-  // Database settings (connect to your app's DB)
-  database: {
-    queryMode: process.env.SITEMAP_DB_MODE || 'function', // 'function' uses db.getAllPages(), 'query' uses raw SQL
-    enableMocking: process.env.SITEMAP_MOCK_DB === 'true' // for testing without DB
+    skipHttpFetch: process.env.SITEMAP_SKIP_HTTP !== 'false' // skip HTTP if lastmod may already be provided
   },
 
   // Debug/logging

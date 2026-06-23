@@ -35,7 +35,7 @@ class SitemapBuilder {
         if (cached) return cached;
       }
 
-      // 2. Fetch all URLs from database or fallback
+      // 2. Fetch all sitemap URLs from fallback source
       this.logger.log('Fetching URLs...');
       let urls = await urlFetcher.fetchAll();
       urls = urlFetcher.enrichUrls(urls);
@@ -66,7 +66,11 @@ class SitemapBuilder {
 
       // 7. Write to file if specified
       if (options.writeFile !== false) {
-        this._writeFile(xml);
+        if (this._canWriteOutput()) {
+          this._writeFile(xml);
+        } else {
+          this.logger.log('Skipping sitemap file write because the configured output path is not writable.');
+        }
       }
 
       // 8. Get statistics
@@ -187,6 +191,18 @@ class SitemapBuilder {
   /**
    * Write XML to file
    */
+  _canWriteOutput() {
+    try {
+      const filePath = path.join(config.output.path, config.output.filename);
+      const dir = path.dirname(filePath);
+      fs.accessSync(dir, fs.constants.W_OK);
+      return true;
+    } catch (e) {
+      this.logger.log('Output path not writable:', e.message);
+      return false;
+    }
+  }
+
   _writeFile(xml) {
     try {
       const filePath = path.join(config.output.path, config.output.filename);

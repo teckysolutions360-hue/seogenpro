@@ -19,17 +19,6 @@ try {
   }
 }
 
-// Try to load database connection, but make it optional
-let db;
-try {
-  db = require('../../db');
-} catch (error) {
-  if (process.env.DEBUG_SITEMAP === 'true') {
-    console.warn('⚠️ Database connection not available - lastmod will skip DB source');
-  }
-  db = null;
-}
-
 class SitemapEnhancementsAdapter {
   constructor() {
     this.DEBUG = process.env.DEBUG_SITEMAP === 'true';
@@ -59,11 +48,8 @@ class SitemapEnhancementsAdapter {
         return out.xml;
       }
 
-      // Fallback: Prepare URLs with database records for lastmod resolution and use orchestrator
-      const urlsWithDb = await this._enrichUrlsWithDbData(urls);
-
       // Use orchestrator for full enhancement
-      const result = await enhancements.orchestrator.generateEnhancedSitemap(urlsWithDb, {
+      const result = await enhancements.orchestrator.generateEnhancedSitemap(urls, {
         baseUrl,
         validateLastmod: extractRealLastmod,
         useIntelligentPriority: true,
@@ -259,51 +245,6 @@ class SitemapEnhancementsAdapter {
     if (score >= 70) return 'Fair';
     if (score >= 60) return 'Poor';
     return 'Critical';
-  }
-
-  /**
-   * Enrich URLs with database data for lastmod resolution
-   */
-  async _enrichUrlsWithDbData(urls) {
-    try {
-      // Convert URLs to objects if needed
-      const urlObjects = urls.map(u => typeof u === 'string' ? { loc: u } : u);
-
-      // For each URL, try to find database record
-      for (let url of urlObjects) {
-        if (!url.dbRecord) {
-          // Try to find in database by URL
-          const record = await this._findUrlInDatabase(url.loc);
-          if (record) {
-            url.dbRecord = record;
-          }
-        }
-      }
-
-      return urlObjects;
-    } catch (error) {
-      console.error('Unable to enrich URLs with DB data:', error.message);
-      return urls;
-    }
-  }
-
-  /**
-   * Find URL record in database
-   */
-  async _findUrlInDatabase(urlString) {
-    try {
-      // This is a placeholder - adapt to your database schema
-      // Example: query pages table to find matching URL
-      const urlPath = new URL(urlString).pathname;
-      
-      // Pseudo-code - adapt to your actual database
-      // const record = await db.query(`SELECT updated_at FROM pages WHERE path = ?`, [urlPath]);
-      // if (record) return { updated_at: record.updated_at };
-      
-      return null;
-    } catch (error) {
-      return null;
-    }
   }
 
   /**

@@ -58,53 +58,79 @@ function parseRedisUrl(redisUrl) {
   }
 }
 
-const redisUrlOptions = parseRedisUrl(process.env.REDIS_URL || process.env.REDIS_URI || process.env.REDIS_CONNECTION_STRING);
-const redisConfig = {
-  redis: Object.assign(
-    {
-      host: process.env.REDIS_HOST || 'localhost',
-      port: parseInt(process.env.REDIS_PORT, 10) || 6379,
-      password: process.env.REDIS_PASSWORD || undefined,
-      db: process.env.REDIS_DB ? parseInt(process.env.REDIS_DB, 10) : undefined
-    },
-    redisUrlOptions || {}
-  )
+const redisUrlOptions = parseRedisUrl(
+  process.env.REDIS_URL ||
+  process.env.REDIS_URI ||
+  process.env.REDIS_CONNECTION_STRING ||
+  process.env.REDIS_TLS_URL ||
+  process.env.REDIS_REDIS_URL
+);
+const explicitRedisConfig = Boolean(
+  redisUrlOptions ||
+  process.env.REDIS_HOST ||
+  process.env.REDIS_ENDPOINT
+);
+
+const redisConfigBase = {
+  ...(process.env.REDIS_HOST ? { host: process.env.REDIS_HOST } : {}),
+  ...(process.env.REDIS_ENDPOINT && !process.env.REDIS_HOST ? { host: process.env.REDIS_ENDPOINT } : {}),
+  ...(process.env.REDIS_PORT ? { port: parseInt(process.env.REDIS_PORT, 10) } : {}),
+  ...(process.env.REDIS_PASSWORD ? { password: process.env.REDIS_PASSWORD } : {}),
+  ...(process.env.REDIS_DB ? { db: parseInt(process.env.REDIS_DB, 10) } : {})
 };
 
-redisConfig.redis.maxRetriesPerRequest = null; // disable node-redis per-request retry cap for Bull
+const redisConfig = explicitRedisConfig ? {
+  redis: Object.assign({}, redisConfigBase, redisUrlOptions || {})
+} : null;
 
-const sitemapQueue = new Bull('sitemap-generation', redisConfig);
+if (!explicitRedisConfig && (process.env.REDIS_PORT || process.env.REDIS_PASSWORD || process.env.REDIS_DB)) {
+  console.warn('[Queue] Redis configuration incomplete. REDIS_HOST or REDIS_URL is required. SaaS sitemap queue disabled.');
+}
 
-let redisConnected = true;
+if (redisConfig && redisConfig.redis) {
+  redisConfig.redis.maxRetriesPerRequest = null; // disable node-redis per-request retry cap for Bull
+}
+
+let sitemapQueue = null;
+let redisConnected = false;
 let lastRedisErrorMessage = null;
 let lastRedisErrorTime = 0;
+
+if (explicitRedisConfig && redisConfig && redisConfig.redis) {
+  sitemapQueue = new Bull('sitemap-generation', redisConfig);
+  redisConnected = true;
+} else {
+  console.log('[Queue] No explicit Redis configuration detected or configuration incomplete. SaaS sitemap queue will use local fallback only.');
+}
 const REDIS_ERROR_LOG_THROTTLE_MS = 10000;
 
-[sitemapQueue.client, sitemapQueue.bclient, sitemapQueue.eclient].forEach((client) => {
-  if (client && typeof client.setMaxListeners === 'function') {
-    client.setMaxListeners(20);
-  }
-});
+if (sitemapQueue) {
+  [sitemapQueue.client, sitemapQueue.bclient, sitemapQueue.eclient].forEach((client) => {
+    if (client && typeof client.setMaxListeners === 'function') {
+      client.setMaxListeners(20);
+    }
+  });
 
-sitemapQueue.on('error', (err) => {
-  redisConnected = false;
-  const message = err && err.message ? err.message : String(err);
-  const now = Date.now();
-  if (message !== lastRedisErrorMessage || now - lastRedisErrorTime > REDIS_ERROR_LOG_THROTTLE_MS) {
-    console.error('[Queue] Redis/Bull connection error:', err && err.stack ? err.stack : err);
-    lastRedisErrorMessage = message;
-    lastRedisErrorTime = now;
-  }
-});
+  sitemapQueue.on('error', (err) => {
+    redisConnected = false;
+    const message = err && err.message ? err.message : String(err);
+    const now = Date.now();
+    if (message !== lastRedisErrorMessage || now - lastRedisErrorTime > REDIS_ERROR_LOG_THROTTLE_MS) {
+      console.error('[Queue] Redis/Bull connection error:', err && err.stack ? err.stack : err);
+      lastRedisErrorMessage = message;
+      lastRedisErrorTime = now;
+    }
+  });
 
-sitemapQueue.on('ready', () => {
-  if (!redisConnected) {
-    console.log('[Queue] Redis/Bull connection restored');
-  }
-  redisConnected = true;
-  lastRedisErrorMessage = null;
-  lastRedisErrorTime = 0;
-});
+  sitemapQueue.on('ready', () => {
+    if (!redisConnected) {
+      console.log('[Queue] Redis/Bull connection restored');
+    }
+    redisConnected = true;
+    lastRedisErrorMessage = null;
+    lastRedisErrorTime = 0;
+  });
+}
 
 // Helper to make a Promise settle quickly so the API remains responsive even
 // if Redis is down or unresponsive.
@@ -256,20 +282,24 @@ async function processSitemapJob(jobData, jobId, progressCb) {
   }
 }
 
-// Use the worker function for Bull jobs as well
-sitemapQueue.process(async (job) => {
-  return processSitemapJob(job.data, job.id, (p) => { if (job && typeof job.progress === 'function') job.progress(p); });
-});
+if (sitemapQueue) {
+  // Use the worker function for Bull jobs as well
+  sitemapQueue.process(async (job) => {
+    return processSitemapJob(job.data, job.id, (p) => { if (job && typeof job.progress === 'function') job.progress(p); });
+  });
 
-// Handle job completion
-sitemapQueue.on('completed', (job) => {
-  console.log(`[Queue] Job ${job.id} completed successfully`);
-});
+  // Handle job completion
+  sitemapQueue.on('completed', (job) => {
+    console.log(`[Queue] Job ${job.id} completed successfully`);
+  });
 
-// Handle job failure
-sitemapQueue.on('failed', (job, error) => {
-  console.error(`[Queue] Job ${job.id} failed:`, error.message);
-});
+  // Handle job failure
+  sitemapQueue.on('failed', (job, error) => {
+    console.error(`[Queue] Job ${job.id} failed:`, error.message);
+  });
+} else {
+  console.log('[Queue] No Redis queue available; using local fallback only.');
+}
 
 // ============================================================================
 // EXPRESS ROUTES
@@ -281,6 +311,14 @@ sitemapQueue.on('failed', (job, error) => {
  * and reports service readiness.
  */
 router.get('/health', async (req, res) => {
+  if (!sitemapQueue) {
+    return res.json({
+      success: true,
+      redis: { configured: false, reachable: false, error: 'Redis not configured' },
+      ready: false
+    });
+  }
+
   const redisHost = redisConfig.redis.host || 'localhost';
   const redisPort = parseInt(redisConfig.redis.port, 10) || 6379;
   const timeout = 1500; // ms
@@ -510,7 +548,19 @@ router.get('/status/:jobId', async (req, res) => {
       });
     }
 
-    let job
+    if (!sitemapQueue) {
+      return res.json({
+        success: true,
+        jobId: req.params.jobId,
+        status: 'processing',
+        progress: 0,
+        createdAt: new Date().toISOString(),
+        data: {},
+        estimatedTimeRemaining: 'Unknown - still processing'
+      });
+    }
+
+    let job;
     try {
       job = await sitemapQueue.getJob(req.params.jobId)
     } catch (err) {
@@ -720,6 +770,13 @@ router.get('/download/:jobId', async (req, res) => {
       return res.send(result.sitemap || '');
     }
 
+    if (!sitemapQueue) {
+      return res.status(503).json({
+        success: false,
+        error: 'Redis queue not configured, cannot retrieve sitemap. Please use the local fallback path or configure Redis.'
+      });
+    }
+
     let job;
     try {
       job = await sitemapQueue.getJob(req.params.jobId);
@@ -802,6 +859,13 @@ router.get('/preview/:jobId', async (req, res) => {
       });
     }
 
+    if (!sitemapQueue) {
+      return res.status(503).json({
+        success: false,
+        error: 'Redis queue not configured, cannot retrieve preview. Please use the local fallback path or configure Redis.'
+      });
+    }
+
     let job;
     try {
       job = await sitemapQueue.getJob(req.params.jobId);
@@ -854,9 +918,7 @@ router.get('/preview/:jobId', async (req, res) => {
  */
 router.get('/stats/:jobId', async (req, res) => {
   try {
-    const job = await sitemapQueue.getJob(req.params.jobId);
-
-    if (!job) {
+    if (!sitemapQueue) {
       const local = localJobResults.get(req.params.jobId);
       if (local) {
         const result = local.result;

@@ -31,7 +31,7 @@ class SitemapSystem {
     if (config.scheduler.autoRun) {
       console.log('[sitemap] Running initial sitemap generation...');
       try {
-        await sitemapBuilder.build({ writeFile: true, forceRefresh: true });
+        await sitemapBuilder.build({ writeFile: false, forceRefresh: true });
       } catch (e) {
         console.error('[sitemap] Initial generation failed:', e.message);
       }
@@ -80,7 +80,7 @@ class SitemapSystem {
       status: 'active',
       initialized: this.initialized,
       features: [
-        'Dynamic URL fetching from database',
+        'Dynamic URL fetching',
         'Automatic type classification',
         'Rule-based priority calculation',
         'Recency-based priority boost',
