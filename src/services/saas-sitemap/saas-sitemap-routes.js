@@ -74,7 +74,7 @@ const explicitRedisConfig = Boolean(
 const REDIS_REQUIRED_MESSAGE = '[Queue] Redis is not configured. SaaS sitemap queue requires REDIS_URL or REDIS_HOST/REDIS_PORT and must be restarted once configured.';
 
 if (!explicitRedisConfig) {
-  throw new Error(REDIS_REQUIRED_MESSAGE);
+  console.error(REDIS_REQUIRED_MESSAGE);
 }
 
 const redisConfigBase = {
@@ -90,7 +90,7 @@ const redisConfig = explicitRedisConfig ? {
 } : null;
 
 if (!explicitRedisConfig && (process.env.REDIS_PORT || process.env.REDIS_PASSWORD || process.env.REDIS_DB)) {
-  throw new Error('[Queue] Redis configuration incomplete. REDIS_HOST or REDIS_URL is required. SaaS sitemap queue cannot start.');
+  console.error('[Queue] Redis configuration incomplete. REDIS_HOST or REDIS_URL is required. SaaS sitemap queue cannot start.');
 }
 
 if (redisConfig && redisConfig.redis) {
@@ -120,7 +120,7 @@ if (explicitRedisConfig && redisConfig && redisConfig.redis) {
     throw err;
   });
 } else {
-  throw new Error(REDIS_REQUIRED_MESSAGE);
+  console.error(REDIS_REQUIRED_MESSAGE);
 }
 const REDIS_ERROR_LOG_THROTTLE_MS = 10000;
 
@@ -153,7 +153,19 @@ if (sitemapQueue) {
 }
 
 async function initSaasSitemapQueue() {
-  if (!queueReadyPromise) return;
+  if (!explicitRedisConfig) {
+    const msg = REDIS_REQUIRED_MESSAGE;
+    if (require.main === module) {
+      throw new Error(msg);
+    }
+    console.error(msg);
+    return;
+  }
+
+  if (!queueReadyPromise) {
+    throw new Error('[Queue] No Redis queue configured to initialize');
+  }
+
   await queueReadyPromise;
 }
 

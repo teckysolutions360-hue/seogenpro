@@ -116,7 +116,11 @@ async function start() {
   }
 }
 
-start();
+if (require.main === module) {
+  start();
+} else {
+  console.log('App loaded as module; initialization skipped.');
+}
 
 // Export app for serverless adapters or external runners (Vercel, serverless-http, etc.)
 module.exports = app;
