@@ -413,53 +413,18 @@ router.post('/generate', async (req, res) => {
  */
 router.get('/status/:jobId', async (req, res) => {
   try {
-if (!sitemapQueue) {
-    return res.status(503).json({
-      success: false,
-      error: 'Redis queue not configured. Please set REDIS_URL or REDIS_HOST and REDIS_PORT.'
+    if (!sitemapQueue) {
+      return res.status(503).json({
+        success: false,
+        error: 'Redis queue not configured. Please set REDIS_URL or REDIS_HOST and REDIS_PORT.'
       });
     }
 
     let job;
     try {
-      job = await sitemapQueue.getJob(req.params.jobId)
+      job = await sitemapQueue.getJob(req.params.jobId);
     } catch (err) {
-      console.error('[API] Status endpoint Redis error:', err && err.message ? err.message : err)
-      // If redis is unavailable, attempt to fall back to local record / disk record
-      return res.status(503).json({
-        success: false,
-        error: 'Redis unavailable, cannot query job status. Please try again later.'
-      });
-        const sitemapDir = path.join(__dirname, '../../tmp/sitemaps', String(req.params.jobId));
-        if (fs.existsSync(sitemapDir)) {
-          const indexPath = path.join(sitemapDir, 'sitemap-index.xml');
-          let sitemapXml = '';
-
-          if (fs.existsSync(indexPath)) {
-            sitemapXml = fs.readFileSync(indexPath, 'utf8');
-          } else {
-            const files = fs.readdirSync(sitemapDir).filter((f) => f.endsWith('.xml'));
-            if (files.length) {
-              sitemapXml = fs.readFileSync(path.join(sitemapDir, files[0]), 'utf8');
-            }
-          }
-
-          return res.json({
-            success: true,
-            jobId: req.params.jobId,
-            status: 'completed',
-            progress: 100,
-            createdAt: new Date().toISOString(),
-            urlCount: 0,
-            sitemapXml,
-            data: {},
-            estimatedTimeRemaining: 'Complete'
-          });
-        }
-      } catch (diskErr) {
-        console.warn('[API] Status fallback disk check failed:', diskErr.message || diskErr);
-      }
-
+      console.error('[API] Status endpoint Redis error:', err && err.message ? err.message : err);
       return res.status(503).json({
         success: false,
         error: 'Redis unavailable, cannot query job status. Please try again later.'
@@ -467,50 +432,9 @@ if (!sitemapQueue) {
     }
 
     if (!job) {
-
-      // If the job record is missing (e.g. cleaned from Redis/Bull), attempt to
-      // locate the generated sitemap on disk so the frontend can still retrieve it.
-      try {
-        const sitemapDir = path.join(__dirname, '../../tmp/sitemaps', String(req.params.jobId));
-        if (fs.existsSync(sitemapDir)) {
-          const indexPath = path.join(sitemapDir, 'sitemap-index.xml');
-          let sitemapXml = '';
-
-          if (fs.existsSync(indexPath)) {
-            sitemapXml = fs.readFileSync(indexPath, 'utf8');
-          } else {
-            const files = fs.readdirSync(sitemapDir).filter((f) => f.endsWith('.xml'));
-            if (files.length) {
-              sitemapXml = fs.readFileSync(path.join(sitemapDir, files[0]), 'utf8');
-            }
-          }
-
-          return res.json({
-            success: true,
-            jobId: req.params.jobId,
-            status: 'completed',
-            progress: 100,
-            createdAt: new Date().toISOString(),
-            urlCount: 0,
-            sitemapXml,
-            data: {},
-            estimatedTimeRemaining: 'Complete'
-          });
-        }
-      } catch (diskErr) {
-        console.warn('[API] Status fallback disk check failed:', diskErr.message || diskErr);
-      }
-
-      // If we cannot find a job record, return a "still processing" result
-      // rather than a 404, so the frontend continues polling until completion.
-      return res.json({
-        success: true,
-        jobId: req.params.jobId,
-        status: 'processing',
-        progress: 0,
-        createdAt: new Date().toISOString(),
-        data: {},
-        estimatedTimeRemaining: 'Unknown - still processing'
+      return res.status(404).json({
+        success: false,
+        error: 'Job not found'
       });
     }
 
@@ -519,7 +443,7 @@ if (!sitemapQueue) {
       const progress = job._progress || 0;
       const failureReason = job.failedReason || null;
 
-      res.json({
+      return res.json({
         success: true,
         jobId: job.id,
         status: state,
@@ -531,42 +455,6 @@ if (!sitemapQueue) {
       });
     } catch (err) {
       console.error('[API] Status endpoint Redis error:', err && err.message ? err.message : err);
-
-      // Attempt fallback based on local cache / disk output
-      return res.status(503).json({
-        success: false,
-        error: 'Redis unavailable, cannot retrieve job state. Please try again later.'
-      });
-        const sitemapDir = path.join(__dirname, '../../tmp/sitemaps', String(req.params.jobId));
-        if (fs.existsSync(sitemapDir)) {
-          const indexPath = path.join(sitemapDir, 'sitemap-index.xml');
-          let sitemapXml = '';
-
-          if (fs.existsSync(indexPath)) {
-            sitemapXml = fs.readFileSync(indexPath, 'utf8');
-          } else {
-            const files = fs.readdirSync(sitemapDir).filter((f) => f.endsWith('.xml'));
-            if (files.length) {
-              sitemapXml = fs.readFileSync(path.join(sitemapDir, files[0]), 'utf8');
-            }
-          }
-
-          return res.json({
-            success: true,
-            jobId: req.params.jobId,
-            status: 'completed',
-            progress: 100,
-            createdAt: new Date().toISOString(),
-            urlCount: 0,
-            sitemapXml,
-            data: {},
-            estimatedTimeRemaining: 'Complete'
-          });
-        }
-      } catch (diskErr) {
-        console.warn('[API] Status fallback disk check failed:', diskErr.message || diskErr);
-      }
-
       return res.status(503).json({
         success: false,
         error: 'Redis unavailable, cannot retrieve job state. Please try again later.'
