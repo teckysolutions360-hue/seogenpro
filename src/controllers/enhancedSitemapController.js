@@ -11,10 +11,10 @@
  * - Structured JSON audit output
  */
 
+const crypto = require('crypto');
 const crawlerService = require('../services/crawlerService');
 const sitemapAdapter = require('../services/sitemapEnhancementsAdapter');
 const { validateUrl } = require('../utils/validators');
-const { v4: uuidv4 } = require('uuid');
 
 const DEBUG_SITEMAP = process.env.DEBUG_SITEMAP === 'true';
 
@@ -50,7 +50,7 @@ exports.generateEnhancedSitemap = async (req, res) => {
       return res.status(400).json({ error: 'Valid URL is required' });
     }
 
-    const jobId = uuidv4();
+    const jobId = crypto.randomUUID();
     jobStore.set(jobId, {
       status: 'processing',
       progress: 0,

@@ -1,6 +1,6 @@
+const crypto = require('crypto');
 const llmsService = require('../services/llmsService');
 const { validateUrl } = require('../utils/validators');
-const { v4: uuidv4 } = require('uuid');
 
 /**
  * LLMS Controller - Enhanced for AI Compliance Analysis
@@ -28,7 +28,7 @@ exports.generateLlmsTxt = async (req, res) => {
     }
 
     // Create async job
-    const jobId = uuidv4();
+    const jobId = crypto.randomUUID();
     
     jobStore.set(jobId, {
       status: 'processing',

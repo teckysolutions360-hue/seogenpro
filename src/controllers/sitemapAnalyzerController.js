@@ -5,8 +5,8 @@
  * Exposes the SitemapAnalyzer as REST API endpoints
  */
 
+const crypto = require('crypto');
 const SitemapAnalyzer = require('../utils/sitemapAnalyzer');
-const { v4: uuid } = require('uuid');
 
 // Store active analysis jobs
 const activeJobs = new Map();
@@ -26,7 +26,7 @@ class SitemapAnalyzerController {
    * }
    */
   static async analyzeSitemap(req, res) {
-    const jobId = uuid();
+    const jobId = crypto.randomUUID();
     
     try {
       const { sitemapUrl, sitemapXml, baseUrl, excludeLowValue = true, generateOptimizedXml = true, fetchLastmod = false } = req.body;
