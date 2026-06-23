@@ -84,7 +84,7 @@ const redisConfig = explicitRedisConfig ? {
 } : null;
 
 if (!explicitRedisConfig && (process.env.REDIS_PORT || process.env.REDIS_PASSWORD || process.env.REDIS_DB)) {
-  console.warn('[Queue] Redis configuration incomplete. REDIS_HOST or REDIS_URL is required. SaaS sitemap queue disabled.');
+  console.error('[Queue] Redis configuration incomplete. REDIS_HOST or REDIS_URL is required. SaaS sitemap queue disabled.');
 }
 
 if (redisConfig && redisConfig.redis) {
@@ -100,7 +100,7 @@ if (explicitRedisConfig && redisConfig && redisConfig.redis) {
   sitemapQueue = new Bull('sitemap-generation', redisConfig);
   redisConnected = true;
 } else {
-  console.log('[Queue] No explicit Redis configuration detected or configuration incomplete. SaaS sitemap queue will use local fallback only.');
+  console.error('[Queue] Redis is not configured. SaaS sitemap queue is disabled and no local fallback is available.');
 }
 const REDIS_ERROR_LOG_THROTTLE_MS = 10000;
 
@@ -139,60 +139,6 @@ function withTimeout(promise, ms) {
     promise,
     new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), ms))
   ]);
-}
-
-// In-memory store for synchronous (fallback) job results so frontend can
-// query status/download for local jobs when Redis/Bull is unavailable.
-const localJobResults = new Map();
-
-function startLocalFallbackJob(jobData) {
-  const localJobId = `local-${Date.now()}`;
-  localJobResults.set(localJobId, {
-    status: 'queued',
-    progress: 0,
-    createdAt: Date.now(),
-    url: jobData.url,
-    sitemapType: jobData.sitemapType || 'standard'
-  });
-
-  setTimeout(() => localJobResults.delete(localJobId), 1000 * 60 * 60);
-
-  processSitemapJob(jobData, localJobId, (p) => {
-    const current = localJobResults.get(localJobId) || {};
-    localJobResults.set(localJobId, {
-      ...current,
-      status: p >= 100 ? 'completed' : 'processing',
-      progress: p
-    });
-  })
-    .then((result) => {
-      const current = localJobResults.get(localJobId) || {};
-      localJobResults.set(localJobId, {
-        ...current,
-        status: 'completed',
-        progress: 100,
-        result
-      });
-    })
-    .catch((procErr) => {
-      console.error('[API] Background processing failed:', procErr && procErr.stack ? procErr.stack : procErr);
-      const current = localJobResults.get(localJobId) || {};
-      localJobResults.set(localJobId, {
-        ...current,
-        status: 'failed',
-        progress: 100,
-        error: procErr && procErr.message ? procErr.message : String(procErr)
-      });
-    });
-
-  return {
-    success: true,
-    jobId: localJobId,
-    status: 'queued',
-    statusUrl: `/api/saas/sitemap/status/${localJobId}`,
-    downloadUrl: `/api/saas/sitemap/download/${localJobId}`,
-    message: 'Sitemap generation started in background (Redis/Bull unavailable). Check status endpoint.'
-  };
 }
 
 // ---------------------------------------------------------------------------
@@ -298,7 +244,7 @@ if (sitemapQueue) {
     console.error(`[Queue] Job ${job.id} failed:`, error.message);
   });
 } else {
-  console.log('[Queue] No Redis queue available; using local fallback only.');
+  console.error('[Queue] No Redis queue configured. SaaS sitemap queue is disabled.');
 }
 
 // ============================================================================
@@ -409,9 +355,11 @@ router.post('/generate', async (req, res) => {
       submittedAt: new Date().toISOString()
     };
 
-    if (!redisConnected) {
-      console.warn('[API] Redis unavailable - falling back to local background job');
-      return res.json(startLocalFallbackJob(jobPayload));
+    if (!sitemapQueue) {
+      return res.status(503).json({
+        success: false,
+        error: 'Redis queue not configured. Please set REDIS_URL or REDIS_HOST/REDIS_PORT and restart the service.'
+      });
     }
 
     let job;
@@ -425,11 +373,11 @@ router.post('/generate', async (req, res) => {
               type: 'exponential',
               delay: 2000
             },
-            timeout: parseInt(process.env.SITEMAP_JOB_TIMEOUT_MS, 10) || 600000, // allow override via env
-            removeOnComplete: false // Keep job history
+            timeout: parseInt(process.env.SITEMAP_JOB_TIMEOUT_MS, 10) || 600000,
+            removeOnComplete: false
           }
         ),
-        5000 // max time to wait for Redis/queue before falling back
+        5000
       );
 
       console.log(`[API] New job submitted: ${job.id} for ${url}`);
@@ -443,74 +391,10 @@ router.post('/generate', async (req, res) => {
         message: 'Sitemap generation queued. Check status URL for progress.'
       });
     } catch (queueErr) {
-      // Likely Redis/Bull connectivity issue or timeout - fall back to background processing.
-      // We avoid blocking the HTTP request by running the crawl/sitemap job in the
-      // background and returning a jobId immediately.
-      console.error('[API] Queue add failed (Redis/timeout), running background job instead:', queueErr && queueErr.message ? queueErr.message : queueErr);
-      const localJobId = `local-${Date.now()}`;
-
-      // Initialize a local job record so status endpoint can report it
-      localJobResults.set(localJobId, {
-        status: 'queued',
-        progress: 0,
-        createdAt: Date.now(),
-        url,
-        sitemapType: sitemapType || 'standard'
-      });
-
-      // Ensure cleanup after 1 hour
-      setTimeout(() => localJobResults.delete(localJobId), 1000 * 60 * 60);
-
-      // Start processing in the background (don't await)
-      processSitemapJob(
-        {
-          url,
-          maxDepth: clientMaxDepth,
-          maxUrls: Math.min(maxUrls || 50000, 500000),
-          sitemapType: sitemapType || 'standard',
-          filterOptions: filterOptions || {},
-          concurrency: concurrencyVal,
-          advancedMode: !!advancedMode,
-          clientId: req.ip,
-          submittedAt: new Date().toISOString()
-        },
-        localJobId,
-        (p) => {
-          const current = localJobResults.get(localJobId) || {};
-          localJobResults.set(localJobId, {
-            ...current,
-            status: p >= 100 ? 'completed' : 'processing',
-            progress: p
-          });
-        }
-      )
-        .then((result) => {
-          const current = localJobResults.get(localJobId) || {};
-          localJobResults.set(localJobId, {
-            ...current,
-            status: 'completed',
-            progress: 100,
-            result
-          });
-        })
-        .catch((procErr) => {
-          console.error('[API] Background processing failed:', procErr && procErr.stack ? procErr.stack : procErr);
-          const current = localJobResults.get(localJobId) || {};
-          localJobResults.set(localJobId, {
-            ...current,
-            status: 'failed',
-            progress: 100,
-            error: procErr && procErr.message ? procErr.message : String(procErr)
-          });
-        });
-
-      return res.json({
-        success: true,
-        jobId: localJobId,
-        status: 'queued',
-        statusUrl: `/api/saas/sitemap/status/${localJobId}`,
-        downloadUrl: `/api/saas/sitemap/download/${localJobId}`,
-        message: 'Sitemap generation started in background (Redis/Bull unavailable). Check status endpoint.'
+      console.error('[API] Queue add failed:', queueErr && queueErr.message ? queueErr.message : queueErr);
+      return res.status(503).json({
+        success: false,
+        error: 'Failed to queue sitemap generation job. Redis is unavailable or the queue rejected the request.'
       });
     }
   } catch (error) {
@@ -529,34 +413,10 @@ router.post('/generate', async (req, res) => {
  */
 router.get('/status/:jobId', async (req, res) => {
   try {
-    // If this is a local synchronous fallback job, return it immediately (no Redis needed)
-    const local = localJobResults.get(req.params.jobId);
-    if (local) {
-      return res.json({
-        success: true,
-        jobId: req.params.jobId,
-        status: local.status,
-        progress: typeof local.progress === 'number' ? local.progress : 100,
-        createdAt: new Date(local.createdAt).toISOString(),
-        // top-level convenience fields expected by the frontend
-        urlCount: local.result && local.result.urlCount ? local.result.urlCount : 0,
-        sitemapXml: local.result && local.result.sitemap ? local.result.sitemap : '',
-        stats: local.result && local.result.stats ? local.result.stats : {},
-        data: local.result,
-        failureReason: local.error || null,
-        estimatedTimeRemaining: estimateTime(typeof local.progress === 'number' ? local.progress : 100)
-      });
-    }
-
-    if (!sitemapQueue) {
-      return res.json({
-        success: true,
-        jobId: req.params.jobId,
-        status: 'processing',
-        progress: 0,
-        createdAt: new Date().toISOString(),
-        data: {},
-        estimatedTimeRemaining: 'Unknown - still processing'
+if (!sitemapQueue) {
+    return res.status(503).json({
+      success: false,
+      error: 'Redis queue not configured. Please set REDIS_URL or REDIS_HOST and REDIS_PORT.'
       });
     }
 
@@ -566,25 +426,10 @@ router.get('/status/:jobId', async (req, res) => {
     } catch (err) {
       console.error('[API] Status endpoint Redis error:', err && err.message ? err.message : err)
       // If redis is unavailable, attempt to fall back to local record / disk record
-      const localRetry = localJobResults.get(req.params.jobId)
-      if (localRetry) {
-        return res.json({
-          success: true,
-          jobId: req.params.jobId,
-          status: localRetry.status,
-          progress: typeof localRetry.progress === 'number' ? localRetry.progress : 100,
-          createdAt: new Date(localRetry.createdAt).toISOString(),
-          urlCount: localRetry.result && localRetry.result.urlCount ? localRetry.result.urlCount : 0,
-          sitemapXml: localRetry.result && localRetry.result.sitemap ? localRetry.result.sitemap : '',
-          stats: localRetry.result && localRetry.result.stats ? localRetry.result.stats : {},
-          data: localRetry.result,
-          failureReason: localRetry.error || null,
-          estimatedTimeRemaining: estimateTime(typeof localRetry.progress === 'number' ? localRetry.progress : 100)
-        });
-      }
-
-      // Try disk fallback if we can locate output
-      try {
+      return res.status(503).json({
+        success: false,
+        error: 'Redis unavailable, cannot query job status. Please try again later.'
+      });
         const sitemapDir = path.join(__dirname, '../../tmp/sitemaps', String(req.params.jobId));
         if (fs.existsSync(sitemapDir)) {
           const indexPath = path.join(sitemapDir, 'sitemap-index.xml');
@@ -688,24 +533,10 @@ router.get('/status/:jobId', async (req, res) => {
       console.error('[API] Status endpoint Redis error:', err && err.message ? err.message : err);
 
       // Attempt fallback based on local cache / disk output
-      const localRetry = localJobResults.get(req.params.jobId);
-      if (localRetry) {
-        return res.json({
-          success: true,
-          jobId: req.params.jobId,
-          status: localRetry.status,
-          progress: typeof localRetry.progress === 'number' ? localRetry.progress : 100,
-          createdAt: new Date(localRetry.createdAt).toISOString(),
-          urlCount: localRetry.result && localRetry.result.urlCount ? localRetry.result.urlCount : 0,
-          sitemapXml: localRetry.result && localRetry.result.sitemap ? localRetry.result.sitemap : '',
-          stats: localRetry.result && localRetry.result.stats ? localRetry.result.stats : {},
-          data: localRetry.result,
-          failureReason: localRetry.error || null,
-          estimatedTimeRemaining: estimateTime(typeof localRetry.progress === 'number' ? localRetry.progress : 100)
-        });
-      }
-
-      try {
+      return res.status(503).json({
+        success: false,
+        error: 'Redis unavailable, cannot retrieve job state. Please try again later.'
+      });
         const sitemapDir = path.join(__dirname, '../../tmp/sitemaps', String(req.params.jobId));
         if (fs.existsSync(sitemapDir)) {
           const indexPath = path.join(sitemapDir, 'sitemap-index.xml');
@@ -756,24 +587,10 @@ router.get('/status/:jobId', async (req, res) => {
  */
 router.get('/download/:jobId', async (req, res) => {
   try {
-    // Prefer local fallback jobs (no Redis required)
-    const local = localJobResults.get(req.params.jobId);
-    if (local) {
-      res.setHeader('Content-Type', 'application/xml; charset=utf-8');
-      const result = local.result;
-      const inline = req.query.inline === 'true';
-      if (!inline) {
-        res.setHeader('Content-Disposition', `attachment; filename="sitemap-${result.sitemapType || 'standard'}-${Date.now()}.xml"`);
-      }
-      if (result.indexPath) return res.sendFile(result.indexPath);
-      if (result.filePaths && result.filePaths.length) return res.sendFile(result.filePaths[0]);
-      return res.send(result.sitemap || '');
-    }
-
-    if (!sitemapQueue) {
-      return res.status(503).json({
-        success: false,
-        error: 'Redis queue not configured, cannot retrieve sitemap. Please use the local fallback path or configure Redis.'
+if (!sitemapQueue) {
+    return res.status(503).json({
+      success: false,
+      error: 'Redis queue not configured. Please set REDIS_URL or REDIS_HOST and REDIS_PORT.'
       });
     }
 
@@ -845,24 +662,10 @@ router.get('/download/:jobId', async (req, res) => {
  */
 router.get('/preview/:jobId', async (req, res) => {
   try {
-    const local = localJobResults.get(req.params.jobId);
-    if (local) {
-      const result = local.result;
-      return res.json({
-        success: true,
-        url: result.url,
-        sitemapType: result.sitemapType,
-        stats: result.stats,
-        previewUrls: result.pages,
-        totalUrls: result.urlCount,
-        message: `Showing first ${result.pages.length} of ${result.urlCount} URLs`
-      });
-    }
-
-    if (!sitemapQueue) {
-      return res.status(503).json({
-        success: false,
-        error: 'Redis queue not configured, cannot retrieve preview. Please use the local fallback path or configure Redis.'
+if (!sitemapQueue) {
+    return res.status(503).json({
+      success: false,
+      error: 'Redis queue not configured. Please set REDIS_URL or REDIS_HOST and REDIS_PORT.'
       });
     }
 
@@ -919,22 +722,10 @@ router.get('/preview/:jobId', async (req, res) => {
 router.get('/stats/:jobId', async (req, res) => {
   try {
     if (!sitemapQueue) {
-      const local = localJobResults.get(req.params.jobId);
-      if (local) {
-        const result = local.result;
-        const { stats, xmlSize, generatedAt } = result;
-        return res.json({
-          success: true,
-          stats: {
-            ...stats,
-            xmlSize,
-            xmlSizeMB: (xmlSize / (1024 * 1024)).toFixed(2),
-            generatedAt
-          }
-        });
-      }
-
-      return res.status(404).json({ success: false, error: 'Job not found' });
+      return res.status(503).json({
+        success: false,
+        error: 'Redis queue not configured. Please set REDIS_URL or REDIS_HOST and REDIS_PORT.'
+      });
     }
 
     const state = await job.getState();
