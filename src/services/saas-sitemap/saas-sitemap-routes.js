@@ -39,16 +39,52 @@ process.on('uncaughtException', (err) => {
 // ============================================================================
 
 const redisConfig = {
-  host: process.env.REDIS_HOST || 'localhost',
-  port: process.env.REDIS_PORT || 6379,
-  password: process.env.REDIS_PASSWORD || undefined,
-  // Disable node-redis maxRetriesPerRequest hard limit so Bull doesn't
-  // fail with "Reached the max retries per request limit (which is 20)".
-  // null disables the per-request retry cap (see redis client options).
-  maxRetriesPerRequest: null
+  redis: {
+    host: process.env.REDIS_HOST || 'localhost',
+    port: parseInt(process.env.REDIS_PORT, 10) || 6379,
+    password: process.env.REDIS_PASSWORD || undefined,
+    DB: process.env.REDIS_DB ? parseInt(process.env.REDIS_DB, 10) : undefined
+  },
+  opts: {
+    // Disable node-redis maxRetriesPerRequest hard limit so Bull doesn't
+    // fail with "Reached the max retries per request limit (which is 20)".
+    // null disables the per-request retry cap (see redis client options).
+    maxRetriesPerRequest: null
+  }
 };
 
 const sitemapQueue = new Bull('sitemap-generation', redisConfig);
+
+let redisConnected = true;
+let lastRedisErrorMessage = null;
+let lastRedisErrorTime = 0;
+const REDIS_ERROR_LOG_THROTTLE_MS = 10000;
+
+[sitemapQueue.client, sitemapQueue.bclient, sitemapQueue.eclient].forEach((client) => {
+  if (client && typeof client.setMaxListeners === 'function') {
+    client.setMaxListeners(20);
+  }
+});
+
+sitemapQueue.on('error', (err) => {
+  redisConnected = false;
+  const message = err && err.message ? err.message : String(err);
+  const now = Date.now();
+  if (message !== lastRedisErrorMessage || now - lastRedisErrorTime > REDIS_ERROR_LOG_THROTTLE_MS) {
+    console.error('[Queue] Redis/Bull connection error:', err && err.stack ? err.stack : err);
+    lastRedisErrorMessage = message;
+    lastRedisErrorTime = now;
+  }
+});
+
+sitemapQueue.on('ready', () => {
+  if (!redisConnected) {
+    console.log('[Queue] Redis/Bull connection restored');
+  }
+  redisConnected = true;
+  lastRedisErrorMessage = null;
+  lastRedisErrorTime = 0;
+});
 
 // Helper to make a Promise settle quickly so the API remains responsive even
 // if Redis is down or unresponsive.
@@ -62,6 +98,56 @@ function withTimeout(promise, ms) {
 // In-memory store for synchronous (fallback) job results so frontend can
 // query status/download for local jobs when Redis/Bull is unavailable.
 const localJobResults = new Map();
+
+function startLocalFallbackJob(jobData) {
+  const localJobId = `local-${Date.now()}`;
+  localJobResults.set(localJobId, {
+    status: 'queued',
+    progress: 0,
+    createdAt: Date.now(),
+    url: jobData.url,
+    sitemapType: jobData.sitemapType || 'standard'
+  });
+
+  setTimeout(() => localJobResults.delete(localJobId), 1000 * 60 * 60);
+
+  processSitemapJob(jobData, localJobId, (p) => {
+    const current = localJobResults.get(localJobId) || {};
+    localJobResults.set(localJobId, {
+      ...current,
+      status: p >= 100 ? 'completed' : 'processing',
+      progress: p
+    });
+  })
+    .then((result) => {
+      const current = localJobResults.get(localJobId) || {};
+      localJobResults.set(localJobId, {
+        ...current,
+        status: 'completed',
+        progress: 100,
+        result
+      });
+    })
+    .catch((procErr) => {
+      console.error('[API] Background processing failed:', procErr && procErr.stack ? procErr.stack : procErr);
+      const current = localJobResults.get(localJobId) || {};
+      localJobResults.set(localJobId, {
+        ...current,
+        status: 'failed',
+        progress: 100,
+        error: procErr && procErr.message ? procErr.message : String(procErr)
+      });
+    });
+
+  return {
+    success: true,
+    jobId: localJobId,
+    status: 'queued',
+    statusUrl: `/api/saas/sitemap/status/${localJobId}`,
+    downloadUrl: `/api/saas/sitemap/download/${localJobId}`,
+    message: 'Sitemap generation started in background (Redis/Bull unavailable). Check status endpoint.'
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Note: rate limiting removed for sitemap generation
@@ -250,24 +336,31 @@ router.post('/generate', async (req, res) => {
     }
 
     // Submit job to Bull. If Bull/Redis is unavailable, fall back to processing synchronously
+    const jobPayload = {
+      url,
+      // allow unlimited depth if user omitted value; clamp only to a generous upper bound if provided
+      maxDepth: clientMaxDepth,
+      maxUrls: Math.min(maxUrls || 50000, 500000),
+      sitemapType: sitemapType || 'standard',
+      filterOptions: filterOptions || {},
+      concurrency: concurrencyVal,
+      advancedMode: !!advancedMode,
+      jsRendering: !!req.body.jsRendering,
+      jsRenderTimeout: typeof req.body.jsRenderTimeout === 'number' ? req.body.jsRenderTimeout : undefined,
+      clientId: req.ip,
+      submittedAt: new Date().toISOString()
+    };
+
+    if (!redisConnected) {
+      console.warn('[API] Redis unavailable - falling back to local background job');
+      return res.json(startLocalFallbackJob(jobPayload));
+    }
+
     let job;
     try {
       job = await withTimeout(
         sitemapQueue.add(
-          {
-            url,
-            // allow unlimited depth if user omitted value; clamp only to a generous upper bound if provided
-            maxDepth: clientMaxDepth,
-            maxUrls: Math.min(maxUrls || 50000, 500000), // Max 500k URLs
-            sitemapType: sitemapType || 'standard',
-            filterOptions: filterOptions || {},
-            concurrency: concurrencyVal,
-            advancedMode: !!advancedMode,
-            jsRendering: !!req.body.jsRendering,
-            jsRenderTimeout: typeof req.body.jsRenderTimeout === 'number' ? req.body.jsRenderTimeout : undefined,
-            clientId: req.ip,
-            submittedAt: new Date().toISOString()
-          },
+          jobPayload,
           {
             attempts: 2,
             backoff: {
