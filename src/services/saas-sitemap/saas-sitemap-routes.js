@@ -71,6 +71,12 @@ const explicitRedisConfig = Boolean(
   process.env.REDIS_ENDPOINT
 );
 
+const REDIS_REQUIRED_MESSAGE = '[Queue] Redis is not configured. SaaS sitemap queue requires REDIS_URL or REDIS_HOST/REDIS_PORT and must be restarted once configured.';
+
+if (!explicitRedisConfig) {
+  throw new Error(REDIS_REQUIRED_MESSAGE);
+}
+
 const redisConfigBase = {
   ...(process.env.REDIS_HOST ? { host: process.env.REDIS_HOST } : {}),
   ...(process.env.REDIS_ENDPOINT && !process.env.REDIS_HOST ? { host: process.env.REDIS_ENDPOINT } : {}),
@@ -84,7 +90,7 @@ const redisConfig = explicitRedisConfig ? {
 } : null;
 
 if (!explicitRedisConfig && (process.env.REDIS_PORT || process.env.REDIS_PASSWORD || process.env.REDIS_DB)) {
-  console.error('[Queue] Redis configuration incomplete. REDIS_HOST or REDIS_URL is required. SaaS sitemap queue disabled.');
+  throw new Error('[Queue] Redis configuration incomplete. REDIS_HOST or REDIS_URL is required. SaaS sitemap queue cannot start.');
 }
 
 if (redisConfig && redisConfig.redis) {
@@ -95,12 +101,26 @@ let sitemapQueue = null;
 let redisConnected = false;
 let lastRedisErrorMessage = null;
 let lastRedisErrorTime = 0;
+let queueReadyPromise = null;
+const QUEUE_CONNECT_TIMEOUT_MS = parseInt(process.env.REDIS_CONNECT_TIMEOUT_MS, 10) || 10000;
 
 if (explicitRedisConfig && redisConfig && redisConfig.redis) {
   sitemapQueue = new Bull('sitemap-generation', redisConfig);
-  redisConnected = true;
+  queueReadyPromise = new Promise((resolve, reject) => {
+    const timeoutId = setTimeout(() => {
+      reject(new Error(`[Queue] Redis queue did not become ready within ${QUEUE_CONNECT_TIMEOUT_MS}ms`));
+    }, QUEUE_CONNECT_TIMEOUT_MS);
+
+    sitemapQueue.once('ready', () => {
+      clearTimeout(timeoutId);
+      resolve();
+    });
+  }).catch((err) => {
+    // Attach a catch handler immediately to prevent unhandled rejection warnings.
+    throw err;
+  });
 } else {
-  console.error('[Queue] Redis is not configured. SaaS sitemap queue is disabled and no local fallback is available.');
+  throw new Error(REDIS_REQUIRED_MESSAGE);
 }
 const REDIS_ERROR_LOG_THROTTLE_MS = 10000;
 
@@ -132,6 +152,11 @@ if (sitemapQueue) {
   });
 }
 
+async function initSaasSitemapQueue() {
+  if (!queueReadyPromise) return;
+  await queueReadyPromise;
+}
+
 // Helper to make a Promise settle quickly so the API remains responsive even
 // if Redis is down or unresponsive.
 function withTimeout(promise, ms) {
@@ -152,7 +177,7 @@ function withTimeout(promise, ms) {
 /**
  * processSitemapJob
  * Helper to run the same job logic used by the Bull worker. This allows the
- * API to fall back to synchronous processing when Redis/Bull is unavailable.
+ * API used by the Bull worker for job processing.
  */
 async function processSitemapJob(jobData, jobId, progressCb) {
   try {
@@ -339,7 +364,7 @@ router.post('/generate', async (req, res) => {
       concurrencyVal = Math.min(cnum, 50);
     }
 
-    // Submit job to Bull. If Bull/Redis is unavailable, fall back to processing synchronously
+    // Submit job to Bull. If Bull/Redis is unavailable, reject the request with 503.
     const jobPayload = {
       url,
       // allow unlimited depth if user omitted value; clamp only to a generous upper bound if provided
@@ -615,6 +640,20 @@ router.get('/stats/:jobId', async (req, res) => {
         error: 'Redis queue not configured. Please set REDIS_URL or REDIS_HOST and REDIS_PORT.'
       });
     }
+    let job;
+    try {
+      job = await sitemapQueue.getJob(req.params.jobId);
+    } catch (err) {
+      console.error('[API] Stats endpoint Redis error:', err && err.message ? err.message : err);
+      return res.status(503).json({
+        success: false,
+        error: 'Redis unavailable, cannot query job stats. Please try again later.'
+      });
+    }
+
+    if (!job) {
+      return res.status(404).json({ success: false, error: 'Job not found' });
+    }
 
     const state = await job.getState();
 
@@ -664,3 +703,4 @@ function estimateTime(progress) {
 }
 
 module.exports = router;
+module.exports.init = initSaasSitemapQueue;

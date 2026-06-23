@@ -8,6 +8,7 @@ const apiRoutes = require('./src/routes/api');
 const sitemapRoute = require('./src/routes/sitemapRoute');
 const sitemapSystem = require('./src/services/sitemap/sitemap-system');
 const sitemapAdminRoutes = require('./src/services/sitemap/sitemap-admin-routes');
+const saasSitemapRoutes = require('./src/services/saas-sitemap/saas-sitemap-routes');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -97,7 +98,10 @@ app.use((req, res) => {
 // Initialize sitemap system. Start server only when run directly (not when imported).
 async function start() {
   try {
-    await sitemapSystem.init();
+    await Promise.all([
+      sitemapSystem.init(),
+      saasSitemapRoutes.init && saasSitemapRoutes.init()
+    ]);
     if (require.main === module) {
       app.listen(PORT, () => {
         console.log(`Server running on port ${PORT}`);
