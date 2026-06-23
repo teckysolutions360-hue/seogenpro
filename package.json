@@ -32,7 +32,8 @@
     "sitemap": "^9.0.0",
     "uuid": "^14.0.1",
     "validator": "^13.15.26",
-    "xml2js": "^0.6.2"
+    "xml2js": "^0.6.2",
+    "serverless-http": "^4.0.0"
   },
   "devDependencies": {
     "@types/uuid": "^10.0.0",
