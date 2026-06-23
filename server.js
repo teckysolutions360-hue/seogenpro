@@ -12,6 +12,12 @@ const sitemapAdminRoutes = require('./src/services/sitemap/sitemap-admin-routes'
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Basic request logging to help diagnose routing in serverless environments
+app.use((req, res, next) => {
+  console.log(`[Req] ${req.method} ${req.originalUrl}`);
+  next();
+});
+
 // Security middleware
 app.use(helmet());
 
@@ -88,15 +94,25 @@ app.use((req, res) => {
   res.status(404).json({ error: 'Endpoint not found' });
 });
 
-// Initialize sitemap system and start server
-(async () => {
+// Initialize sitemap system. Start server only when run directly (not when imported).
+async function start() {
   try {
     await sitemapSystem.init();
-    app.listen(PORT, () => {
-      console.log(`Server running on port ${PORT}`);
-    });
+    if (require.main === module) {
+      app.listen(PORT, () => {
+        console.log(`Server running on port ${PORT}`);
+      });
+    } else {
+      console.log('Server initialized (app exported for serverless/runtime integration)');
+    }
   } catch (err) {
     console.error('Failed to initialize sitemap system:', err);
-    process.exit(1);
+    if (require.main === module) process.exit(1);
+    throw err;
   }
-})();
+}
+
+start();
+
+// Export app for serverless adapters or external runners (Vercel, serverless-http, etc.)
+module.exports = app;

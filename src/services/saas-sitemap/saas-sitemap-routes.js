@@ -38,20 +38,40 @@ process.on('uncaughtException', (err) => {
 // SETUP BULL QUEUE
 // ============================================================================
 
-const redisConfig = {
-  redis: {
-    host: process.env.REDIS_HOST || 'localhost',
-    port: parseInt(process.env.REDIS_PORT, 10) || 6379,
-    password: process.env.REDIS_PASSWORD || undefined,
-    DB: process.env.REDIS_DB ? parseInt(process.env.REDIS_DB, 10) : undefined
-  },
-  opts: {
-    // Disable node-redis maxRetriesPerRequest hard limit so Bull doesn't
-    // fail with "Reached the max retries per request limit (which is 20)".
-    // null disables the per-request retry cap (see redis client options).
-    maxRetriesPerRequest: null
+function parseRedisUrl(redisUrl) {
+  if (!redisUrl) return null;
+  try {
+    const url = new URL(redisUrl);
+    const options = {
+      host: url.hostname,
+      port: Number(url.port) || 6379,
+      password: url.password || undefined,
+      db: url.pathname && url.pathname.length > 1 ? parseInt(url.pathname.slice(1), 10) : undefined
+    };
+    if (url.protocol === 'rediss:') {
+      options.tls = {};
+    }
+    return options;
+  } catch (err) {
+    console.warn('[Queue] Invalid REDIS_URL, falling back to individual REDIS_* env vars:', err.message);
+    return null;
   }
+}
+
+const redisUrlOptions = parseRedisUrl(process.env.REDIS_URL || process.env.REDIS_URI || process.env.REDIS_CONNECTION_STRING);
+const redisConfig = {
+  redis: Object.assign(
+    {
+      host: process.env.REDIS_HOST || 'localhost',
+      port: parseInt(process.env.REDIS_PORT, 10) || 6379,
+      password: process.env.REDIS_PASSWORD || undefined,
+      db: process.env.REDIS_DB ? parseInt(process.env.REDIS_DB, 10) : undefined
+    },
+    redisUrlOptions || {}
+  )
 };
+
+redisConfig.redis.maxRetriesPerRequest = null; // disable node-redis per-request retry cap for Bull
 
 const sitemapQueue = new Bull('sitemap-generation', redisConfig);
 
@@ -261,8 +281,8 @@ sitemapQueue.on('failed', (job, error) => {
  * and reports service readiness.
  */
 router.get('/health', async (req, res) => {
-  const redisHost = redisConfig.host || 'localhost';
-  const redisPort = parseInt(redisConfig.port, 10) || 6379;
+  const redisHost = redisConfig.redis.host || 'localhost';
+  const redisPort = parseInt(redisConfig.redis.port, 10) || 6379;
   const timeout = 1500; // ms
 
   const socket = new net.Socket();
