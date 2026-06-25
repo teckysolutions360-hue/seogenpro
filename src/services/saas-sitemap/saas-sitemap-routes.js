@@ -40,8 +40,9 @@ process.on('uncaughtException', (err) => {
 
 function parseRedisUrl(redisUrl) {
   if (!redisUrl) return null;
+  const normalizedUrl = String(redisUrl).trim().replace(/^['"]+|['"]+$/g, '');
   try {
-    const url = new URL(redisUrl);
+    const url = new URL(normalizedUrl);
     const options = {
       host: url.hostname,
       port: Number(url.port) || 6379,
@@ -49,7 +50,7 @@ function parseRedisUrl(redisUrl) {
       db: url.pathname && url.pathname.length > 1 ? parseInt(url.pathname.slice(1), 10) : undefined
     };
     if (url.protocol === 'rediss:') {
-      options.tls = {};
+        options.tls = { servername: url.hostname };
     }
     return options;
   } catch (err) {
@@ -58,13 +59,14 @@ function parseRedisUrl(redisUrl) {
   }
 }
 
-const redisUrlOptions = parseRedisUrl(
-  process.env.REDIS_URL ||
+const rawRedisUrl = process.env.REDIS_URL ||
   process.env.REDIS_URI ||
   process.env.REDIS_CONNECTION_STRING ||
   process.env.REDIS_TLS_URL ||
-  process.env.REDIS_REDIS_URL
-);
+  process.env.REDIS_REDIS_URL ||
+  null;
+const redisUrl = rawRedisUrl ? String(rawRedisUrl).trim().replace(/^['"]+|['"]+$/g, '') : null;
+const redisUrlOptions = parseRedisUrl(redisUrl);
 const explicitRedisConfig = Boolean(
   redisUrlOptions ||
   process.env.REDIS_HOST ||
@@ -85,41 +87,53 @@ const redisConfigBase = {
   ...(process.env.REDIS_DB ? { db: parseInt(process.env.REDIS_DB, 10) } : {})
 };
 
-const redisConfig = explicitRedisConfig ? {
-  redis: Object.assign({}, redisConfigBase, redisUrlOptions || {})
-} : null;
+function buildBullRedisConfig() {
+  const host = redisUrlOptions?.host || redisConfigBase.host;
+  const port = redisUrlOptions?.port || redisConfigBase.port || 6379;
+  const db = typeof redisUrlOptions?.db === 'number' ? redisUrlOptions.db : (redisConfigBase.db || 0);
+  const password = redisUrlOptions?.password || redisConfigBase.password;
+  const disableReady = process.env.REDIS_DISABLE_READY_CHECK === '1' || (host && host.includes('upstash.io'));
+
+  const opts = {
+    ...(typeof password !== 'undefined' ? { password } : {}),
+    ...(disableReady ? { no_ready_check: true } : {}),
+    connect_timeout: parseInt(process.env.REDIS_CONNECT_TIMEOUT_MS, 10) || 10000,
+    socket_keepalive: true
+  };
+
+  if (redisUrlOptions?.tls) {
+    opts.tls = redisUrlOptions.tls;
+  }
+
+  return {
+    redis: {
+      host,
+      port,
+      DB: db,
+      opts
+    }
+  };
+}
+
+const redisConfig = explicitRedisConfig ? buildBullRedisConfig() : null;
+
+if (redisConfig && redisConfig.redis) {
+  console.log('[Queue] Redis config applied:', JSON.stringify({
+    host: redisConfig.redis.host,
+    port: redisConfig.redis.port,
+    db: redisConfig.redis.DB,
+    no_ready_check: redisConfig.redis.opts && redisConfig.redis.opts.no_ready_check,
+    tls: redisConfig.redis.opts && Boolean(redisConfig.redis.opts.tls),
+    usingUrl: Boolean(redisUrlOptions)
+  }));
+} else {
+  console.log('[Queue] No explicit Redis configuration available. REDIS_URL or REDIS_HOST/REDIS_PORT is required.');
+}
 
 if (!explicitRedisConfig && (process.env.REDIS_PORT || process.env.REDIS_PASSWORD || process.env.REDIS_DB)) {
   console.error('[Queue] Redis configuration incomplete. REDIS_HOST or REDIS_URL is required. SaaS sitemap queue cannot start.');
 }
 
-if (redisConfig && redisConfig.redis) {
-  redisConfig.redis.maxRetriesPerRequest = null; // disable node-redis per-request retry cap for Bull
-}
-
-// Make the Redis/Bull connection more tolerant for managed TLS providers
-// (e.g. Upstash) which may not behave like a long-lived Redis instance.
-// - `REDIS_DISABLE_READY_CHECK=1` forces `enableReadyCheck=false`.
-// - For Upstash hosts we automatically disable the ready check.
-if (redisConfig && redisConfig.redis) {
-  try {
-    const host = redisUrlOptions && redisUrlOptions.host ? redisUrlOptions.host : redisConfig.redis.host;
-    const disableReady = process.env.REDIS_DISABLE_READY_CHECK === '1' || (host && host.includes('upstash.io'));
-    if (disableReady) {
-      redisConfig.redis.no_ready_check = true;
-    }
-
-    // Respect connect timeout env if provided (ms)
-    redisConfig.redis.connect_timeout = parseInt(process.env.REDIS_CONNECT_TIMEOUT_MS, 10) || redisConfig.redis.connect_timeout || 10000;
-
-    // Keepalive option may help with transient disconnects
-    if (typeof redisConfig.redis.socket_keepalive === 'undefined') {
-      redisConfig.redis.socket_keepalive = true;
-    }
-  } catch (err) {
-    console.warn('[Queue] Failed to apply resilient Redis options:', err && err.message ? err.message : err);
-  }
-}
 
 let sitemapQueue = null;
 let redisConnected = false;
@@ -360,46 +374,50 @@ async function processSitemapJob(jobData, jobId, progressCb) {
 }
 
 if (sitemapQueue) {
-  // Use the worker function for Bull jobs as well
-  sitemapQueue.process(async (job) => {
-    const jobId = job?.id || job?.jobId || 'unknown';
-    return processSitemapJob(job.data, jobId, (p) => {
-      // Update job with progress data for frontend polling (non-blocking)
-      if (job && typeof job.update === 'function') {
-        const progressData = typeof p === 'object' && p !== null
-          ? p
-          : { percent: Number(p || 0), urlCount: 0 };
-        
-        job.update({
-          ...job.data,
-          _jobProgress: progressData
-        }).catch(err => {
-          console.error('[Worker] Failed to update job progress:', err.message);
-        });
-      }
-      
-      // Also try job.progress() as fallback
-      if (job && typeof job.progress === 'function') {
-        try {
-          const percent = typeof p === 'object' ? (p.percent || 0) : Number(p || 0);
-          job.progress(percent);
-        } catch (err) {
-          console.error('[Worker] Failed to set job progress:', err.message);
+  if (!global.__sitemapQueueWorkerAttached) {
+    // Use the worker function for Bull jobs as well
+    sitemapQueue.process(async (job) => {
+      const jobId = job?.id || job?.jobId || 'unknown';
+      return processSitemapJob(job.data, jobId, (p) => {
+        // Update job with progress data for frontend polling (non-blocking)
+        if (job && typeof job.update === 'function') {
+          const progressData = typeof p === 'object' && p !== null
+            ? p
+            : { percent: Number(p || 0), urlCount: 0 };
+          
+          job.update({
+            ...job.data,
+            _jobProgress: progressData
+          }).catch(err => {
+            console.error('[Worker] Failed to update job progress:', err.message);
+          });
         }
-      }
+        
+        // Also try job.progress() as fallback
+        if (job && typeof job.progress === 'function') {
+          try {
+            const percent = typeof p === 'object' ? (p.percent || 0) : Number(p || 0);
+            job.progress(percent);
+          } catch (err) {
+            console.error('[Worker] Failed to set job progress:', err.message);
+          }
+        }
+      });
     });
-  });
 
-  // Handle job completion
-  sitemapQueue.on('completed', (job) => {
-    const completedJobId = job?.id || job?.jobId || 'unknown';
-    console.log(`[Queue] Job ${completedJobId} completed successfully`);
-  });
+    // Handle job completion
+    sitemapQueue.on('completed', (job) => {
+      const completedJobId = job?.id || job?.jobId || 'unknown';
+      console.log(`[Queue] Job ${completedJobId} completed successfully`);
+    });
 
-  // Handle job failure
-  sitemapQueue.on('failed', (job, error) => {
-    console.error(`[Queue] Job ${job.id} failed:`, error.message);
-  });
+    // Handle job failure
+    sitemapQueue.on('failed', (job, error) => {
+      console.error(`[Queue] Job ${job.id} failed:`, error.message);
+    });
+
+    global.__sitemapQueueWorkerAttached = true;
+  }
 } else {
   console.error('[Queue] No Redis queue configured. SaaS sitemap queue is disabled.');
 }
