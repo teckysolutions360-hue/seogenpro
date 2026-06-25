@@ -106,11 +106,11 @@ if (redisConfig && redisConfig.redis) {
     const host = redisUrlOptions && redisUrlOptions.host ? redisUrlOptions.host : redisConfig.redis.host;
     const disableReady = process.env.REDIS_DISABLE_READY_CHECK === '1' || (host && host.includes('upstash.io'));
     if (disableReady) {
-      redisConfig.redis.enableReadyCheck = false;
+      redisConfig.redis.no_ready_check = true;
     }
 
     // Respect connect timeout env if provided (ms)
-    redisConfig.redis.connectTimeout = parseInt(process.env.REDIS_CONNECT_TIMEOUT_MS, 10) || redisConfig.redis.connectTimeout || 10000;
+    redisConfig.redis.connect_timeout = parseInt(process.env.REDIS_CONNECT_TIMEOUT_MS, 10) || redisConfig.redis.connect_timeout || 10000;
 
     // Keepalive option may help with transient disconnects
     if (typeof redisConfig.redis.socket_keepalive === 'undefined') {
@@ -210,34 +210,6 @@ if (explicitRedisConfig && redisConfig && redisConfig.redis) {
   }
 }
 const REDIS_ERROR_LOG_THROTTLE_MS = 10000;
-
-if (sitemapQueue) {
-  [sitemapQueue.client, sitemapQueue.bclient, sitemapQueue.eclient].forEach((client) => {
-    if (client && typeof client.setMaxListeners === 'function') {
-      client.setMaxListeners(20);
-    }
-  });
-
-  sitemapQueue.on('error', (err) => {
-    redisConnected = false;
-    const message = err && err.message ? err.message : String(err);
-    const now = Date.now();
-    if (message !== lastRedisErrorMessage || now - lastRedisErrorTime > REDIS_ERROR_LOG_THROTTLE_MS) {
-      console.error('[Queue] Redis/Bull connection error:', err && err.stack ? err.stack : err);
-      lastRedisErrorMessage = message;
-      lastRedisErrorTime = now;
-    }
-  });
-
-  sitemapQueue.on('ready', () => {
-    if (!redisConnected) {
-      console.log('[Queue] Redis/Bull connection restored');
-    }
-    redisConnected = true;
-    lastRedisErrorMessage = null;
-    lastRedisErrorTime = 0;
-  });
-}
 
 async function initSaasSitemapQueue() {
   if (!explicitRedisConfig) {
