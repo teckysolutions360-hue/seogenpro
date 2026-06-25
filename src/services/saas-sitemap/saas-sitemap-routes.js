@@ -132,29 +132,74 @@ const activeSitemapAbortControllers = new Map();
 
 if (explicitRedisConfig && redisConfig && redisConfig.redis) {
   try {
-    sitemapQueue = new Bull('sitemap-generation', redisConfig);
-    queueReadyPromise = new Promise((resolve, reject) => {
-      const timeoutId = setTimeout(() => {
-        reject(new Error(`[Queue] Redis queue did not become ready within ${QUEUE_CONNECT_TIMEOUT_MS}ms`));
-      }, QUEUE_CONNECT_TIMEOUT_MS);
+    // Reuse a global queue instance to avoid creating multiple Bull/Redis clients
+    // during Hot Module Reloading or repeated requires. This prevents adding
+    // duplicate event listeners which cause MaxListenersExceededWarning and
+    // duplicate ready checks.
+    if (global.__sitemapQueue) {
+      sitemapQueue = global.__sitemapQueue;
+      queueReadyPromise = global.__sitemapQueueReadyPromise;
+    } else {
+      sitemapQueue = new Bull('sitemap-generation', redisConfig);
+      global.__sitemapQueue = sitemapQueue;
 
-      sitemapQueue.once('ready', () => {
-        clearTimeout(timeoutId);
-        console.log('[Queue] Redis queue is ready');
-        resolve();
+      queueReadyPromise = new Promise((resolve, reject) => {
+        const timeoutId = setTimeout(() => {
+          reject(new Error(`[Queue] Redis queue did not become ready within ${QUEUE_CONNECT_TIMEOUT_MS}ms`));
+        }, QUEUE_CONNECT_TIMEOUT_MS);
+
+        sitemapQueue.once('ready', () => {
+          clearTimeout(timeoutId);
+          console.log('[Queue] Redis queue is ready');
+          resolve();
+        });
+
+        // Handle connection errors before the ready event
+        sitemapQueue.once('error', (err) => {
+          clearTimeout(timeoutId);
+          reject(err);
+        });
+      }).catch((err) => {
+        console.error('[Queue] Queue ready promise failed:', err && err.message ? err.message : err);
+        return Promise.resolve(false);
       });
 
-      // Handle connection errors before the ready event
-      sitemapQueue.once('error', (err) => {
-        clearTimeout(timeoutId);
-        reject(err);
-      });
-    }).catch((err) => {
-      // Attach a catch handler immediately to prevent unhandled rejection warnings.
-      console.error('[Queue] Queue ready promise failed:', err && err.message ? err.message : err);
-      // Return the error but don't throw - let the server start
-      return Promise.resolve(false);
-    });
+      // store promise globally so subsequent module loads can reuse it
+      global.__sitemapQueueReadyPromise = queueReadyPromise;
+    }
+
+    // Attach listeners and client tuning only once
+    if (!global.__sitemapQueueListenersAttached) {
+      if (sitemapQueue) {
+        [sitemapQueue.client, sitemapQueue.bclient, sitemapQueue.eclient].forEach((client) => {
+          if (client && typeof client.setMaxListeners === 'function') {
+            client.setMaxListeners(50);
+          }
+        });
+
+        sitemapQueue.on('error', (err) => {
+          redisConnected = false;
+          const message = err && err.message ? err.message : String(err);
+          const now = Date.now();
+          if (message !== lastRedisErrorMessage || now - lastRedisErrorTime > REDIS_ERROR_LOG_THROTTLE_MS) {
+            console.error('[Queue] Redis/Bull connection error:', err && err.stack ? err.stack : err);
+            lastRedisErrorMessage = message;
+            lastRedisErrorTime = now;
+          }
+        });
+
+        sitemapQueue.on('ready', () => {
+          if (!redisConnected) {
+            console.log('[Queue] Redis/Bull connection restored');
+          }
+          redisConnected = true;
+          lastRedisErrorMessage = null;
+          lastRedisErrorTime = 0;
+        });
+      }
+
+      global.__sitemapQueueListenersAttached = true;
+    }
   } catch (err) {
     console.error('[Queue] Failed to create Bull queue:', err && err.message ? err.message : err);
     sitemapQueue = null;
