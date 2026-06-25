@@ -153,10 +153,33 @@ async function start() {
   }
 }
 
+// Ensure initialization happens regardless of execution context
+let initPromise = null;
+function ensureInitialized() {
+  if (!initPromise) {
+    initPromise = Promise.all([
+      sitemapSystem.init(),
+      saasSitemapRoutes.init && saasSitemapRoutes.init()
+    ]).catch(err => {
+      console.error('[init] Failed to initialize systems:', err);
+    });
+  }
+  return initPromise;
+}
+
+// In serverless mode, initialize on first request to avoid timeout at startup
+// In direct mode, still call start()
 if (require.main === module) {
   start();
 } else {
-  console.log('App loaded as module; initialization skipped.');
+  // Serverless mode: initialize on first request
+  console.log('App loaded as module; initialization will run on first request.');
+  app.use((req, res, next) => {
+    ensureInitialized().then(() => next()).catch(err => {
+      console.error('[init] Initialization error during request:', err);
+      next(err);
+    });
+  });
 }
 
 // Export app for serverless adapters or external runners (Vercel, serverless-http, etc.)
