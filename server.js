@@ -101,6 +101,22 @@ app.use('/api/', (req, res, next) => {
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// In serverless mode, initialize on sitemap/API requests only.
+if (require.main !== module) {
+  console.log('App loaded as module; initialization will run on first relevant request.');
+  app.use((req, res, next) => {
+    const shouldInit = req.path.startsWith('/api') || req.path === '/sitemap.xml' || req.path.startsWith('/api/sitemap') || req.path.startsWith('/api/saas');
+    if (!shouldInit) {
+      return next();
+    }
+
+    ensureInitialized().then(() => next()).catch(err => {
+      console.error('[init] Initialization error during request:', err);
+      next(err);
+    });
+  });
+}
+
 // API Routes
 app.use('/api', apiRoutes);
 
