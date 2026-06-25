@@ -97,6 +97,30 @@ if (redisConfig && redisConfig.redis) {
   redisConfig.redis.maxRetriesPerRequest = null; // disable node-redis per-request retry cap for Bull
 }
 
+// Make the Redis/Bull connection more tolerant for managed TLS providers
+// (e.g. Upstash) which may not behave like a long-lived Redis instance.
+// - `REDIS_DISABLE_READY_CHECK=1` forces `enableReadyCheck=false`.
+// - For Upstash hosts we automatically disable the ready check.
+if (redisConfig && redisConfig.redis) {
+  try {
+    const host = redisUrlOptions && redisUrlOptions.host ? redisUrlOptions.host : redisConfig.redis.host;
+    const disableReady = process.env.REDIS_DISABLE_READY_CHECK === '1' || (host && host.includes('upstash.io'));
+    if (disableReady) {
+      redisConfig.redis.enableReadyCheck = false;
+    }
+
+    // Respect connect timeout env if provided (ms)
+    redisConfig.redis.connectTimeout = parseInt(process.env.REDIS_CONNECT_TIMEOUT_MS, 10) || redisConfig.redis.connectTimeout || 10000;
+
+    // Keepalive option may help with transient disconnects
+    if (typeof redisConfig.redis.socket_keepalive === 'undefined') {
+      redisConfig.redis.socket_keepalive = true;
+    }
+  } catch (err) {
+    console.warn('[Queue] Failed to apply resilient Redis options:', err && err.message ? err.message : err);
+  }
+}
+
 let sitemapQueue = null;
 let redisConnected = false;
 let lastRedisErrorMessage = null;
