@@ -63,10 +63,34 @@ class Crawler {
     this.verbose = !!options.verbose;
     // respect robots.txt by default; set to false to ignore rules (useful for testing)
     this.respectRobots = options.respectRobots !== false;
+
+    this.abortController = new AbortController();
+    this.signal = options.signal || this.abortController.signal;
+    if (options.signal) {
+      options.signal.addEventListener('abort', () => {
+        if (!this.abortController.signal.aborted) {
+          this.abortController.abort(options.signal.reason || new Error('Crawl aborted'));
+        }
+      });
+    }
+  }
+
+  abort(reason = new Error('Crawl aborted')) {
+    if (!this.abortController.signal.aborted) {
+      this.abortController.abort(reason);
+    }
+  }
+
+  _throwIfAborted() {
+    if (this.signal && this.signal.aborted) {
+      const reason = this.signal.reason || new Error('Crawl aborted');
+      throw reason instanceof Error ? reason : new Error(String(reason));
+    }
   }
 
   async crawl(progressCb) {
     if (typeof progressCb !== 'function') progressCb = () => {}
+    this._throwIfAborted();
     await this.robots.init();
     // Seed queue from declared sitemaps (robots.txt Sitemap: entries) when available.
     const declaredSitemaps = this.robots.getSitemaps() || [];
@@ -105,6 +129,8 @@ class Crawler {
     const self = this;
 
     const processItem = async ({ url, depth }) => {
+      this._throwIfAborted();
+
       if (depth > this.maxDepth) {
         if (this.verbose) console.log(`[Crawler] depth limit exceeded (${depth} > ${this.maxDepth}): ${url}`);
         return;
@@ -172,6 +198,12 @@ class Crawler {
           console.log(`[Crawler] queued ${links.urls.length} links, queue now has ${this.queue.length} items`);
         }
       } catch (err) {
+        const isAbort = err && (err.name === 'AbortError' || err.message === 'Crawl aborted' || err.message === 'Job cancelled by user');
+        if (isAbort) {
+          this.inflight.delete(norm);
+          throw err;
+        }
+
         // log fetch errors when verbose
         if (this.verbose) {
           console.error(`[Crawler] failed to fetch ${norm}:`, err.message);
@@ -268,23 +300,31 @@ class Crawler {
     const now = Date.now();
     const diff = now - this._lastRequestTime;
     if (diff < this.requestDelay) {
-      await new Promise(r => setTimeout(r, this.requestDelay - diff));
+      await new Promise((resolve, reject) => {
+        const timeout = setTimeout(resolve, this.requestDelay - diff);
+        if (this.signal) {
+          this.signal.addEventListener('abort', () => {
+            clearTimeout(timeout);
+            reject(this.signal.reason || new Error('Crawl aborted'));
+          }, { once: true });
+        }
+      });
     }
     this._lastRequestTime = Date.now();
 
     const response = await fetch(url, {
       headers: { 'User-Agent': this.userAgent },
       redirect: 'follow',
-      timeout: 30000
-    });
+      timeout: 30000,
+      signal: this.signal
+    })
 
-    // Accept any 2xx status rather than only 200 to be more tolerant.
     if (!response.ok) {
       if (this.verbose) console.log(`[Crawler] non-OK response for ${url}: ${response.status}`);
       throw new Error(`status ${response.status}`);
     }
 
-      const contentType = response.headers.get('content-type') || '';
+    const contentType = response.headers.get('content-type') || '';
     let html = '';
     let links = { urls: [], images: [], videos: [] };
 

@@ -104,23 +104,41 @@ let lastRedisErrorTime = 0;
 let queueReadyPromise = null;
 const QUEUE_CONNECT_TIMEOUT_MS = parseInt(process.env.REDIS_CONNECT_TIMEOUT_MS, 10) || 10000;
 
-if (explicitRedisConfig && redisConfig && redisConfig.redis) {
-  sitemapQueue = new Bull('sitemap-generation', redisConfig);
-  queueReadyPromise = new Promise((resolve, reject) => {
-    const timeoutId = setTimeout(() => {
-      reject(new Error(`[Queue] Redis queue did not become ready within ${QUEUE_CONNECT_TIMEOUT_MS}ms`));
-    }, QUEUE_CONNECT_TIMEOUT_MS);
+const activeSitemapAbortControllers = new Map();
 
-    sitemapQueue.once('ready', () => {
-      clearTimeout(timeoutId);
-      resolve();
+if (explicitRedisConfig && redisConfig && redisConfig.redis) {
+  try {
+    sitemapQueue = new Bull('sitemap-generation', redisConfig);
+    queueReadyPromise = new Promise((resolve, reject) => {
+      const timeoutId = setTimeout(() => {
+        reject(new Error(`[Queue] Redis queue did not become ready within ${QUEUE_CONNECT_TIMEOUT_MS}ms`));
+      }, QUEUE_CONNECT_TIMEOUT_MS);
+
+      sitemapQueue.once('ready', () => {
+        clearTimeout(timeoutId);
+        console.log('[Queue] Redis queue is ready');
+        resolve();
+      });
+
+      // Handle connection errors before the ready event
+      sitemapQueue.once('error', (err) => {
+        clearTimeout(timeoutId);
+        reject(err);
+      });
+    }).catch((err) => {
+      // Attach a catch handler immediately to prevent unhandled rejection warnings.
+      console.error('[Queue] Queue ready promise failed:', err && err.message ? err.message : err);
+      // Return the error but don't throw - let the server start
+      return Promise.resolve(false);
     });
-  }).catch((err) => {
-    // Attach a catch handler immediately to prevent unhandled rejection warnings.
-    throw err;
-  });
+  } catch (err) {
+    console.error('[Queue] Failed to create Bull queue:', err && err.message ? err.message : err);
+    sitemapQueue = null;
+  }
 } else {
-  console.error(REDIS_REQUIRED_MESSAGE);
+  if (!explicitRedisConfig) {
+    console.error(REDIS_REQUIRED_MESSAGE);
+  }
 }
 const REDIS_ERROR_LOG_THROTTLE_MS = 10000;
 
@@ -156,7 +174,9 @@ async function initSaasSitemapQueue() {
   if (!explicitRedisConfig) {
     const msg = REDIS_REQUIRED_MESSAGE;
     if (require.main === module) {
-      throw new Error(msg);
+      console.warn(msg);
+      console.warn('[Queue] Server will start but sitemap queue will return error responses');
+      return; // Don't crash the server, just log a warning
     }
     console.error(msg);
     return;
@@ -166,7 +186,14 @@ async function initSaasSitemapQueue() {
     throw new Error('[Queue] No Redis queue configured to initialize');
   }
 
-  await queueReadyPromise;
+  try {
+    await queueReadyPromise;
+    console.log('[Queue] Sitemap queue initialized successfully');
+  } catch (err) {
+    console.error('[Queue] Failed to initialize sitemap queue:', err && err.message ? err.message : err);
+    console.error('[Queue] Server will start but sitemap generation will fail until Redis is available');
+    // Don't crash the server - sitemap endpoints will return 503 errors when Redis is unavailable
+  }
 }
 
 // Helper to make a Promise settle quickly so the API remains responsive even
@@ -192,6 +219,10 @@ function withTimeout(promise, ms) {
  * API used by the Bull worker for job processing.
  */
 async function processSitemapJob(jobData, jobId, progressCb) {
+  const normalizedJobId = String(jobId);
+  const abortController = new AbortController();
+  activeSitemapAbortControllers.set(normalizedJobId, abortController);
+
   try {
     // Ensure numeric, safe depth bounds to avoid runaway crawls when called
     // directly or via user input.
@@ -206,7 +237,7 @@ async function processSitemapJob(jobData, jobId, progressCb) {
 
     maxUrls = Math.min(maxUrls || MAX_URLS, MAX_URLS);
 
-    if (typeof progressCb === 'function') progressCb(5);
+    if (typeof progressCb === 'function') progressCb({ percent: 5, urlCount: 0 });
     console.log(`[Worker] Processing job ${jobId} for ${url} (maxDepth=${maxDepth})`);
 
     const requestDelayMs = parseInt(process.env.SITEMAP_REQUEST_DELAY_MS, 10);
@@ -223,10 +254,19 @@ async function processSitemapJob(jobData, jobId, progressCb) {
       collectVideos: !!jobData.collectVideos,
       verbose: true,
       jsRendering: !!jobData.jsRendering,
-      jsRenderTimeout: typeof jobData.jsRenderTimeout === 'number' ? jobData.jsRenderTimeout : 10000
+      jsRenderTimeout: typeof jobData.jsRenderTimeout === 'number' ? jobData.jsRenderTimeout : 10000,
+      signal: abortController.signal
     });
 
-    const pages = await crawler.crawl(progressCb);
+    const crawlProgressCb = (value) => {
+      if (typeof progressCb !== 'function') return;
+      const payload = typeof value === 'number'
+        ? { percent: value, urlCount: crawler.discovered.length }
+        : value;
+      progressCb(payload);
+    };
+
+    const pages = await crawler.crawl(crawlProgressCb);
     console.log(`[Worker] Crawled ${pages.length} URLs`);
 
     const outputDir = require('path').join(__dirname, '../../tmp/sitemaps', String(jobId));
@@ -260,20 +300,59 @@ async function processSitemapJob(jobData, jobId, progressCb) {
     if (indexPath) result.indexPath = indexPath;
     return result;
   } catch (error) {
+    const isCancelled = error && (
+      error.name === 'AbortError' ||
+      error.message === 'Job cancelled by user' ||
+      error.message === 'Crawl aborted'
+    )
+
+    if (isCancelled) {
+      console.warn(`[Worker] Job ${jobId} cancelled by user`);
+      throw new Error('Job cancelled by user');
+    }
+
     console.error(`[Worker] Job ${jobId} failed:`, error && error.stack ? error.stack : error);
     throw error;
+  } finally {
+    activeSitemapAbortControllers.delete(String(jobId));
   }
 }
 
 if (sitemapQueue) {
   // Use the worker function for Bull jobs as well
   sitemapQueue.process(async (job) => {
-    return processSitemapJob(job.data, job.id, (p) => { if (job && typeof job.progress === 'function') job.progress(p); });
+    const jobId = job?.id || job?.jobId || 'unknown';
+    return processSitemapJob(job.data, jobId, (p) => {
+      // Update job with progress data for frontend polling (non-blocking)
+      if (job && typeof job.update === 'function') {
+        const progressData = typeof p === 'object' && p !== null
+          ? p
+          : { percent: Number(p || 0), urlCount: 0 };
+        
+        job.update({
+          ...job.data,
+          _jobProgress: progressData
+        }).catch(err => {
+          console.error('[Worker] Failed to update job progress:', err.message);
+        });
+      }
+      
+      // Also try job.progress() as fallback
+      if (job && typeof job.progress === 'function') {
+        try {
+          const percent = typeof p === 'object' ? (p.percent || 0) : Number(p || 0);
+          job.progress(percent);
+        } catch (err) {
+          console.error('[Worker] Failed to set job progress:', err.message);
+        }
+      }
+    });
   });
 
   // Handle job completion
   sitemapQueue.on('completed', (job) => {
-    console.log(`[Queue] Job ${job.id} completed successfully`);
+    const completedJobId = job?.id || job?.jobId || 'unknown';
+    console.log(`[Queue] Job ${completedJobId} completed successfully`);
   });
 
   // Handle job failure
@@ -417,14 +496,15 @@ router.post('/generate', async (req, res) => {
         5000
       );
 
-      console.log(`[API] New job submitted: ${job.id} for ${url}`);
+      const submittedJobId = job?.id || job?.jobId || String(job);
+      console.log(`[API] New job submitted: ${submittedJobId} for ${url}`);
 
       return res.json({
         success: true,
-        jobId: job.id,
+        jobId: submittedJobId,
         status: 'queued',
-        statusUrl: `/api/saas/sitemap/status/${job.id}`,
-        downloadUrl: `/api/saas/sitemap/download/${job.id}`,
+        statusUrl: `/api/saas/sitemap/status/${submittedJobId}`,
+        downloadUrl: `/api/saas/sitemap/download/${submittedJobId}`,
         message: 'Sitemap generation queued. Check status URL for progress.'
       });
     } catch (queueErr) {
@@ -436,11 +516,62 @@ router.post('/generate', async (req, res) => {
     }
   } catch (error) {
     console.error('[API] Generate endpoint error:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       error: 'Failed to submit sitemap generation job',
       details: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
+  }
+});
+
+/**
+ * POST /api/saas/sitemap/cancel/:jobId
+ * Cancel a sitemap generation job if it is still queued or running
+ */
+router.post('/cancel/:jobId', async (req, res) => {
+  try {
+    if (!sitemapQueue) {
+      return res.status(503).json({
+        success: false,
+        error: 'Redis queue not configured. Please set REDIS_URL or REDIS_HOST and REDIS_PORT.'
+      });
+    }
+
+    let job;
+    try {
+      job = await sitemapQueue.getJob(req.params.jobId);
+    } catch (err) {
+      console.error('[API] Cancel endpoint Redis error:', err && err.message ? err.message : err);
+      return res.status(503).json({
+        success: false,
+        error: 'Redis unavailable, cannot cancel job. Please try again later.'
+      });
+    }
+
+    if (!job) {
+      return res.status(404).json({ success: false, error: 'Job not found' });
+    }
+
+    const state = await job.getState();
+    const activeController = activeSitemapAbortControllers.get(String(req.params.jobId));
+
+    if (activeController) {
+      activeController.abort(new Error('Job cancelled by user'));
+    }
+
+    if (['waiting', 'delayed', 'paused'].includes(state)) {
+      try {
+        await job.remove();
+        return res.json({ success: true, cancelled: true, state: 'removed' });
+      } catch (removeErr) {
+        console.warn('[API] Failed to remove queued job, falling back to abort:', removeErr && removeErr.message ? removeErr.message : removeErr);
+      }
+    }
+
+    return res.json({ success: true, cancelled: true, state });
+  } catch (error) {
+    console.error('[API] Cancel endpoint error:', error);
+    return res.status(500).json({ success: false, error: 'Failed to cancel sitemap job' });
   }
 });
 
@@ -477,14 +608,43 @@ router.get('/status/:jobId', async (req, res) => {
 
     try {
       const state = await job.getState();
-      const progress = job._progress || 0;
+      const rawProgress = job._progress || 0;
+      let progress = 0;
+      let urlCount = 0;
+
+      // Check if progress data was updated via job.update()
+      if (job.data && job.data._jobProgress) {
+        const jobProgress = job.data._jobProgress;
+        progress = Number(jobProgress.percent || 0);
+        urlCount = Number(jobProgress.urlCount || 0);
+      } else if (typeof rawProgress === 'string') {
+        try {
+          const parsed = JSON.parse(rawProgress);
+          progress = Number(parsed.percent || 0);
+          urlCount = Number(parsed.urlCount || 0);
+        } catch {
+          progress = Number(rawProgress || 0);
+        }
+      } else if (typeof rawProgress === 'object' && rawProgress !== null) {
+        progress = Number(rawProgress.percent || 0);
+        urlCount = Number(rawProgress.urlCount || 0);
+      } else {
+        progress = Number(rawProgress || 0);
+      }
+
       const failureReason = job.failedReason || null;
+      const result = job.returnvalue || {};
+      const returnedJobId = job.id || job.jobId || null;
+
+      console.log(`[Status] Job ${returnedJobId}: ${state}, progress=${progress}%, urls=${urlCount}`);
 
       return res.json({
         success: true,
-        jobId: job.id,
+        jobId: returnedJobId,
         status: state,
         progress,
+        urlCount: result.urlCount !== undefined ? result.urlCount : urlCount,
+        sitemap: state === 'completed' ? result.sitemap : undefined,
         createdAt: new Date(job.timestamp).toISOString(),
         data: job.data,
         failureReason,
@@ -499,7 +659,7 @@ router.get('/status/:jobId', async (req, res) => {
     }
   } catch (error) {
     console.error('[API] Status endpoint error:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       error: 'Failed to get job status'
     });
@@ -574,7 +734,7 @@ if (!sitemapQueue) {
     console.log(`[API] Downloaded job ${job.id}`);
   } catch (error) {
     console.error('[API] Download endpoint error:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       error: 'Failed to download sitemap'
     });
@@ -633,7 +793,7 @@ if (!sitemapQueue) {
     });
   } catch (error) {
     console.error('[API] Preview endpoint error:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       error: 'Failed to get preview'
     });
@@ -690,7 +850,7 @@ router.get('/stats/:jobId', async (req, res) => {
     });
   } catch (error) {
     console.error('[API] Stats endpoint error:', error);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       error: 'Failed to get stats'
     });

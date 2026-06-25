@@ -2,7 +2,8 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
-require('dotenv').config();
+const path = require('path');
+require('dotenv').config({ path: path.resolve(__dirname, '.env') });
 
 const apiRoutes = require('./src/routes/api');
 const sitemapRoute = require('./src/routes/sitemapRoute');
@@ -19,10 +20,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// Security middleware
-app.use(helmet());
-
-// CORS Configuration - Allow any localhost port for development
+// CORS Configuration - Must be BEFORE helmet for proper cross-origin handling
 const corsOptions = {
   origin: function (origin, callback) {
     // Allow requests with no origin (like mobile apps or curl requests)
@@ -50,6 +48,13 @@ const corsOptions = {
 
 app.use(cors(corsOptions));
 
+// Security middleware - configured to not block CORS
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: "cross-origin" }, // Allow cross-origin requests
+  crossOriginOpenerPolicy: false,
+  crossOriginEmbedderPolicy: false
+}));
+
 // Rate limiting
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
@@ -63,6 +68,35 @@ const limiter = rateLimit({
 });
 app.use('/api/', limiter);
 
+// Response timeout middleware - ensure responses are sent within a reasonable time
+app.use('/api/', (req, res, next) => {
+  const timeoutMs = parseInt(process.env.API_RESPONSE_TIMEOUT_MS, 10) || 120000; // 2 minutes default
+  const timer = setTimeout(() => {
+    if (!res.headersSent) {
+      console.error(`[Timeout] API request exceeded ${timeoutMs}ms: ${req.method} ${req.originalUrl}`);
+      res.status(504).json({
+        success: false,
+        error: 'Request timeout - backend took too long to respond'
+      });
+    }
+  }, timeoutMs);
+
+  // Clear timeout when response is sent
+  const origSend = res.send;
+  res.send = function(data) {
+    clearTimeout(timer);
+    return origSend.call(this, data);
+  };
+
+  const origJson = res.json;
+  res.json = function(data) {
+    clearTimeout(timer);
+    return origJson.call(this, data);
+  };
+
+  next();
+});
+
 // Body parsing
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -72,6 +106,9 @@ app.use('/api', apiRoutes);
 
 // Sitemap Admin Routes - at /api/sitemap/admin/*
 app.use('/api/sitemap/admin', sitemapAdminRoutes);
+
+// SaaS sitemap queue routes - at /api/saas/*
+app.use('/api/saas', saasSitemapRoutes);
 
 // Dynamic Sitemap Route - at /sitemap.xml
 app.use('/', sitemapRoute);

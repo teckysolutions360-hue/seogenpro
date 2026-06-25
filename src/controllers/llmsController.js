@@ -35,6 +35,8 @@ exports.generateLlmsTxt = async (req, res) => {
       progress: 0,
       content: '',
       pageCount: 0,
+      crawledCount: 0,
+      maxPages,
       aiReadinessScore: 0,
       startedAt: new Date()
     });
@@ -54,7 +56,19 @@ exports.generateLlmsTxt = async (req, res) => {
           allowSummary: true,
           allowQuotation: true,
           allowEmbedding: true,
-          requireAttribution
+          requireAttribution,
+          onProgress: (progress, currentUrl, crawledCount, maxPages) => {
+            const job = jobStore.get(jobId);
+            if (job) {
+              job.progress = progress;
+              if (typeof crawledCount === 'number') {
+                job.crawledCount = crawledCount;
+              }
+              if (typeof maxPages === 'number') {
+                job.maxPages = maxPages;
+              }
+            }
+          }
         });
 
         const job = jobStore.get(jobId);
@@ -115,6 +129,8 @@ exports.getLlmsStatus = (req, res) => {
     status: job.status,
     progress: job.progress,
     pageCount: job.pageCount,
+    crawledCount: job.crawledCount || 0,
+    maxPages: job.maxPages || 0,
     startedAt: job.startedAt
   };
 

@@ -221,7 +221,12 @@ class CrawlerService {
       });
 
       this.visited.add(normalizedUrl);
-      onProgress && onProgress(Math.round((this.visited.size / this.maxPages) * 100), normalizedUrl);
+      onProgress && onProgress(
+        Math.round((this.visited.size / this.maxPages) * 100),
+        normalizedUrl,
+        this.visited.size,
+        this.maxPages
+      );
       console.log(`✓ Successfully crawled: ${normalizedUrl}`);
 
       // Parse HTML and find links
@@ -494,7 +499,12 @@ class CrawlerService {
       });
 
       this.visited.add(normalizedUrl);
-      onProgress(Math.round((this.visited.size / this.maxPages) * 100), normalizedUrl);
+      onProgress(
+        Math.round((this.visited.size / this.maxPages) * 100),
+        normalizedUrl,
+        this.visited.size,
+        this.maxPages
+      );
       console.log(`✓ Successfully crawled: ${normalizedUrl}`);
 
       // Parse HTML and find links

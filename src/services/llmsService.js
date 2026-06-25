@@ -34,7 +34,10 @@ class LlmsService {
       console.log(`[LLMS] Metadata analyzed - Type: ${contentType}, Sitemap: ${hasSitemap}, Robots: ${hasRobots}`);
 
       // Step 2: Crawl site pages
-      const crawled = await this.crawlSite(baseUrl, options.maxPages || 50);
+      const crawled = await this.crawlSite(baseUrl, {
+        ...options,
+        onProgress: options.onProgress
+      });
       console.log(`[LLMS] Crawled ${crawled.length} pages`);
 
       // Filter out system/xml pages conservatively and dedupe by normalized URL, slug and title
@@ -257,8 +260,11 @@ class LlmsService {
         timeout,
         requestDelay,
         respectRobotsTxt: false,
-        onProgress: (progress, currentUrl) => {
-          console.log(`[Crawler] Progress: ${Math.round(progress * 100)}% - ${currentUrl}`);
+        onProgress: (progress, currentUrl, crawledCount, maxPagesArg) => {
+          if (typeof options.onProgress === 'function') {
+            options.onProgress(progress, currentUrl, crawledCount, maxPagesArg);
+          }
+          console.log(`[Crawler] Progress: ${Math.round(progress * 100)}% - ${currentUrl} (crawled: ${crawledCount})`);
         },
         onComplete: (crawledPages) => {
           const elapsed = (Date.now() - startTime) / 1000;
